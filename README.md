@@ -68,6 +68,36 @@ ffmpeg -version                                # 확인만 하면 된다
 .\.venv\Scripts\python -m upcon.cli 영상.mp4 [--out-dir 폴더] [--model realesr-animevideov3]
 ```
 
+## 배포본 빌드 (Portable)
+
+```powershell
+# 1) 동봉 실행파일 준비 (SHA-256 검증 포함)
+.\.venv\Scripts\python scripts\fetch_binaries.py --ffmpeg
+
+# 2) Portable 빌드 (onedir)
+.\.venv\Scripts\python -m PyInstaller packaging\upcon.spec --noconfirm
+
+# 결과: dist\UPCON\  (UPCON.exe + _internal\)
+```
+
+FFmpeg 는 **n8.1.2 GPL shared** 빌드를 불변 태그로 고정해 받는다 (`scripts/fetch_binaries.py`).
+`ffmpeg.exe`/`ffprobe.exe` 는 작고 `av*.dll`·`sw*.dll` 을 공유하므로, static 빌드 대비
+`bin\` 이 317MB → 196MB 로 줄어든다 (기능 동일). `ffplay.exe` 는 UPCON 이 쓰지 않아 받지 않는다.
+
+`onefile` 은 쓰지 않는다 — 실행할 때마다 수백 MB 를 임시 폴더에 풀어야 하고 문제 추적이 어렵다.
+
+빌드본 검증용 콘솔 실행파일(배포본에는 포함되지 않음):
+
+```powershell
+.\.venv\Scripts\python -m PyInstaller packaging\selftest.spec --noconfirm --distpath dist-selftest
+# dist-selftest\UPCON-selftest\UPCON-selftest.exe 실행 → 경로/keyring/GPU/ncnn/실제 업스케일/
+#   폴백 인코더/입력 형식 매트릭스/임시파일 정리까지 점검하고 ALL OK 또는 FAIL 을 출력한다.
+```
+
+라이선스: 배포 구성의 제3자 구성요소와 의무사항은 `docs/THIRD_PARTY_NOTICES.md` 참조.
+FFmpeg 는 GPL 빌드이며 Corresponding Source 제공 방식은 installer 단계에서 확정한다.
+Real-ESRGAN 가중치 라이선스는 **unresolved** 상태다.
+
 ## 의존성
 
 | 파일 | 용도 |

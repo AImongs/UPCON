@@ -37,9 +37,15 @@ engine/
 # --- build 산출물 ---
 build/
 dist/
-*.spec
+build_selftest/
+dist_selftest/
+build-*/
+dist-*/
 *.spec.bak
 Output/
+# PyInstaller 스펙(packaging/*.spec)은 빌드 '소스' 이므로 추적한다.
+# 루트에 PyInstaller 가 자동 생성하는 스펙만 무시한다.
+/*.spec
 
 # --- 로그 / 임시 ---
 logs/
