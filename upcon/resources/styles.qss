@@ -1,0 +1,150 @@
+/* UPCON 기본 테마 (라이트, 단일 테마) */
+
+* {
+    font-family: "Segoe UI", "Malgun Gothic", "맑은 고딕", sans-serif;
+    font-size: 14px;
+    color: #1f2937;
+}
+
+QMainWindow, QWidget#root {
+    background: #f3f4f6;
+}
+
+QScrollArea { border: none; background: transparent; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+/* ---- 헤더 ---- */
+QLabel#brand {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: 4px;
+    color: #111827;
+}
+QLabel#tagline {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 3px;
+    color: #6b7280;
+}
+QToolButton#settingsButton {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 6px 12px;
+    color: #374151;
+}
+QToolButton#settingsButton:hover { background: #f9fafb; border-color: #d1d5db; }
+
+/* ---- 카드 ---- */
+QFrame.card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+}
+QLabel.cardTitle {
+    font-size: 13px;
+    font-weight: 700;
+    color: #6b7280;
+    letter-spacing: 1px;
+}
+
+/* ---- 드롭 존 ---- */
+QFrame#dropZone {
+    background: #ffffff;
+    border: 2px dashed #c7cdd6;
+    border-radius: 16px;
+}
+QFrame#dropZone[hover="true"] {
+    background: #eef4ff;
+    border: 2px dashed #3b82f6;
+}
+QFrame#dropZone[loaded="true"] {
+    border: 2px solid #d1d5db;
+}
+QLabel#dropIcon { font-size: 40px; }
+QLabel#dropTitle { font-size: 18px; font-weight: 600; color: #111827; }
+QLabel#dropHint { font-size: 13px; color: #6b7280; }
+
+/* ---- 정보 표시 ---- */
+QLabel.infoKey { color: #6b7280; }
+QLabel.infoValue { color: #111827; font-weight: 600; }
+QLabel#fileName { font-size: 15px; font-weight: 700; color: #111827; }
+
+/* ---- 라디오 ---- */
+QRadioButton { spacing: 8px; padding: 4px 0; }
+QRadioButton::indicator { width: 18px; height: 18px; }
+QRadioButton:disabled { color: #9ca3af; }
+QLabel.hint { color: #6b7280; font-size: 12px; }
+
+/* ---- 버튼 ---- */
+QPushButton {
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    background: #ffffff;
+    padding: 9px 18px;
+    font-weight: 600;
+}
+QPushButton:hover { background: #f9fafb; border-color: #9ca3af; }
+QPushButton:pressed { background: #f3f4f6; }
+QPushButton:disabled { color: #9ca3af; background: #f3f4f6; border-color: #e5e7eb; }
+
+QPushButton#primary {
+    background: #2563eb;
+    border: none;
+    color: #ffffff;
+    font-size: 16px;
+    padding: 14px 24px;
+}
+QPushButton#primary:hover { background: #1d4ed8; }
+QPushButton#primary:pressed { background: #1e40af; }
+QPushButton#primary:disabled { background: #bfd0fb; color: #ffffff; }
+
+/* ---- 진행률 ---- */
+QProgressBar {
+    border: none;
+    background: #e5e7eb;
+    border-radius: 6px;
+    height: 12px;
+    text-align: center;
+    color: transparent;
+}
+QProgressBar::chunk { background: #2563eb; border-radius: 6px; }
+QLabel#statusText { color: #374151; font-weight: 600; }
+QLabel#statusSub { color: #6b7280; font-size: 12px; }
+
+QLabel.envHint { color: #1d4ed8; font-size: 12px; font-weight: 600; }
+
+QPushButton#danger {
+    background: #ffffff;
+    border: 1px solid #fca5a5;
+    color: #b91c1c;
+    font-size: 15px;
+    padding: 14px 24px;
+}
+QPushButton#danger:hover { background: #fef2f2; }
+QPushButton#danger:disabled { color: #9ca3af; border-color: #e5e7eb; }
+
+QLabel#dialogTitle { font-size: 18px; font-weight: 700; color: #111827; }
+QLineEdit { border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; background: #ffffff; }
+QLineEdit:focus { border-color: #2563eb; }
+
+/* ---- 대기열 표 ---- */
+QTableWidget {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+    alternate-background-color: #f9fafb;
+    gridline-color: transparent;
+    selection-background-color: #dbeafe;
+    selection-color: #111827;
+}
+QTableWidget::item { padding: 6px 8px; }
+QHeaderView::section {
+    background: #f3f4f6;
+    color: #6b7280;
+    font-weight: 600;
+    border: none;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 6px 8px;
+}
+QPushButton.small { padding: 5px 10px; font-size: 12px; font-weight: 500; }

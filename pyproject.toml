@@ -1,0 +1,18 @@
+[project]
+name = "upcon"
+version = "0.3.0"
+description = "UPCON - AI Video Upscaler (Windows)"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.11",
+    "nvidia-ml-py>=12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pyinstaller>=6.22",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

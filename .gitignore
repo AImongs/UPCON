@@ -1,0 +1,68 @@
+# --- secrets (절대 커밋 금지) ---
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+secrets/
+fal_key*
+credentials.json
+*.credentials
+secrets.json
+.netrc
+
+# --- 사용자 개인 설정 / %LOCALAPPDATA% 데이터 (절대 커밋 금지) ---
+/config.json
+/queue.json
+upcon_test_data_*/
+upcon_ui_data_*/
+
+# --- python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# --- 동봉 실행파일 (scripts/fetch_binaries.py 로 받음; 라이선스 파일만 추적) ---
+bin/*
+!bin/LICENSE-*.txt
+# --- 모델: 공식 배포 파일은 fetch 로 받고, UPCON 변환본(general-*)과 라이선스는 git 에 포함 ---
+models/realesr-animevideov3-*
+models/realesrgan-*
+engine/
+
+# --- build 산출물 ---
+build/
+dist/
+*.spec
+*.spec.bak
+Output/
+
+# --- 로그 / 임시 ---
+logs/
+*.log
+tmp/
+temp/
+upcon_ui_*/
+
+# --- 테스트용 실제 영상 + 업스케일 결과 영상 (절대 커밋 금지) ---
+tests/samples/*.mp4
+tests/samples/*.mov
+tests/samples/*.mkv
+tests/samples/*.avi
+tests/samples/*.webm
+*_2x.mp4
+*_2x_*.mp4
+*_UPCON.mp4
+
+# --- 테스트 산출물: UI 스크린샷(소용량)만 추적, 대용량 영상/비교 이미지는 제외 ---
+tests/out/*
+!tests/out/*.png
+tests/out/quality/
+
+# --- IDE ---
+.idea/
+.vscode/

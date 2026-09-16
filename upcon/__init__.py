@@ -1,0 +1,5 @@
+"""UPCON - AI Video Upscaler."""
+
+APP_NAME = "UPCON"
+APP_TAGLINE = "AI VIDEO UPSCALER"
+APP_VERSION = "0.3.0"

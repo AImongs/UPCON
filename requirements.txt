@@ -1,0 +1,3 @@
+# UPCON 런타임 의존성
+PySide6>=6.11
+nvidia-ml-py>=12
