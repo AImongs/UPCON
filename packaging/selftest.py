@@ -2,13 +2,29 @@
 
 frozen 환경에서만 확인 가능한 것들을 점검한다:
 경로 해석, keyring 백엔드, GPU 감지, ncnn self-test, 실제 2x 업스케일, 임시파일 정리.
-API Key 값은 출력하지 않는다.
+
+안전장치 (실제 사용자 데이터를 건드리지 않는다)
+- UPCON_DATA_DIR 을 작업 폴더 아래로 강제한다 -> %LOCALAPPDATA%/UPCON 의 실제 설정,
+  대기열, 로그를 읽지도 쓰지도 않는다.
+- keyring 은 테스트 전용 네임스페이스(TEST_KEYRING_SERVICE)만 쓴다.
+  실제 fal API Key(서비스 이름 'UPCON')는 **읽지도 삭제하지도 않는다.** 값은 당연히 출력하지 않는다.
 """
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# 실제 production credential 과 절대 겹치지 않는 테스트 전용 네임스페이스
+TEST_KEYRING_SERVICE = "UPCON-selftest"
+TEST_KEYRING_USER = "probe"
+
+# upcon 모듈을 import 하기 전에 데이터 디렉터리를 격리한다.
+_work = os.environ.get("UPCON_SELFTEST_WORK")
+if _work:
+    _iso = Path(_work) / "data"
+    _iso.mkdir(parents=True, exist_ok=True)
+    os.environ["UPCON_DATA_DIR"] = str(_iso)
 
 
 import logging
@@ -34,7 +50,7 @@ def main() -> int:
     print("resources_dir :", paths.resources_dir())
     print("bundled_bin   :", paths.bundled_bin_dir())
     print("bundled_models:", paths.bundled_models_dir())
-    print("user_data_dir :", paths.user_data_dir())
+    print("user_data_dir :", paths.user_data_dir(), "(테스트용 격리)" if os.environ.get("UPCON_DATA_DIR") else "")
     print("logs_dir      :", paths.logs_dir())
     for p in (paths.resources_dir() / "styles.qss", paths.bundled_bin_dir(), paths.bundled_models_dir()):
         if not p.exists():
@@ -73,13 +89,15 @@ def main() -> int:
         from upcon.core import credentials
         print("backend:", credentials.backend_name())
         import keyring
-        keyring.set_password("UPCON-selftest", "probe", "VALUE")
-        got = keyring.get_password("UPCON-selftest", "probe")
-        keyring.delete_password("UPCON-selftest", "probe")
-        print("자격증명 쓰기/읽기/삭제:", "OK" if got == "VALUE" else "실패")
-        if got != "VALUE":
+        # 테스트 전용 네임스페이스에서만 읽고 쓰고 지운다.
+        keyring.set_password(TEST_KEYRING_SERVICE, TEST_KEYRING_USER, "SELFTEST-VALUE")
+        got = keyring.get_password(TEST_KEYRING_SERVICE, TEST_KEYRING_USER)
+        keyring.delete_password(TEST_KEYRING_SERVICE, TEST_KEYRING_USER)
+        print(f"자격증명 쓰기/읽기/삭제({TEST_KEYRING_SERVICE}):", "OK" if got == "SELFTEST-VALUE" else "실패")
+        if got != "SELFTEST-VALUE":
             fails.append("keyring roundtrip 실패")
-        print("사용자 fal 키 저장돼 있음:", bool(credentials.get_fal_key()))
+        # 실제 fal API Key(서비스 'UPCON')는 존재 여부조차 조회하지 않는다.
+        print("실제 fal API Key: 조회하지 않음 (테스트가 사용자 credential 을 건드리지 않음)")
     except Exception as e:
         fails.append(f"keyring 실패: {type(e).__name__}: {e}")
         print("keyring 오류:", type(e).__name__, e)
