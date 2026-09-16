@@ -77,7 +77,7 @@ def test_requirements_txt_matches_pyproject():
 def test_runtime_deps_do_not_include_dev_or_convert_only():
     """pytest/pyinstaller/torch 는 런타임 의존성이 아니어야 한다."""
     declared = _declared()
-    for name in ("pytest", "pyinstaller", "torch"):
+    for name in ("pytest", "pyinstaller", "torch", "pillow"):
         assert name not in declared, f"{name} 은 런타임 의존성이 아니다"
 
 

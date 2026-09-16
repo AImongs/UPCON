@@ -98,6 +98,26 @@ FFmpeg 는 **n8.1.2 GPL shared** 빌드를 불변 태그로 고정해 받는다 
 FFmpeg 는 GPL 빌드이며 Corresponding Source 제공 방식은 installer 단계에서 확정한다.
 Real-ESRGAN 가중치 라이선스는 **unresolved** 상태다.
 
+### 앱 아이콘
+
+원본 `upcon/resources/upcon.png` 에서 Windows 멀티 해상도 ICO 를 생성한다.
+
+```powershell
+.\.venv\Scripts\python -m pip install "Pillow>=10"      # pyproject 의 [icon] extra
+.\.venv\Scripts\python scripts\make_icon.py             # -> upcon/resources/upcon.ico
+```
+
+`upcon.ico` 하나만 있으면 **UPCON.exe · 앱 창 · 시작 메뉴 바로가기 · Setup.exe · Uninstaller**
+가 모두 같은 아이콘을 쓴다 (`paths.app_icon_file()`, `packaging/upcon.spec` 의 `APP_ICON`,
+`upcon.iss` 의 `SetupIconFile`). 파일이 없으면 기본 아이콘으로 정상 빌드된다.
+
+포함 해상도: 16 / 32 / 48 / 64 / 128 / 256.
+원본 PNG 는 흰 여백이 있는 RGB 이므로, 스크립트가 여백을 잘라내고 둥근 모서리 바깥을
+투명으로 만든다 (어두운 작업 표시줄에서 흰 모서리가 남지 않게).
+
+`--mark-small` 옵션을 주면 작은 크기(16/32/48)에 워드마크를 뺀 심볼만 넣는다.
+작은 아이콘에서는 "UPCON / AI VIDEO UPSCALER" 글자가 뭉개져 읽히지 않기 때문이다.
+
 ## Windows Installer (Inno Setup)
 
 ```powershell

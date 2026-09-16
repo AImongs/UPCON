@@ -20,6 +20,10 @@ dev = [
 convert = [
     "torch>=2.4",
 ]
+# 아이콘 생성 전용 (scripts/make_icon.py: upcon.png -> upcon.ico). 앱 실행에는 불필요.
+icon = [
+    "Pillow>=10",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
