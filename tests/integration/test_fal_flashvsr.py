@@ -21,7 +21,6 @@ from upcon.providers.fal_base import FalApi, FalAuthError, explain_fal_error
 from upcon.providers.fal_flashvsr import ENDPOINT, FalFlashVSRProvider
 
 pytestmark = pytest.mark.integration
-SAMPLES = Path(__file__).resolve().parents[1] / "samples"
 
 
 @pytest.fixture(scope="module")
@@ -67,10 +66,10 @@ def test_invalid_key():
     assert not r.ok and "API Key" in r.message
 
 
-def test_a_480p_10s_with_audio(key, cfg, tmp_path):
+def test_a_480p_10s_with_audio(key, cfg, tmp_path, sample_480p):
     src = tmp_path / "a_480p_10s.mp4"
-    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(SAMPLES / "sample_480p.mp4"),
-                    "-stream_loop", "1", "-i", str(SAMPLES / "sample_480p.mp4"), "-t", "10",
+    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(sample_480p),
+                    "-stream_loop", "1", "-i", str(sample_480p), "-t", "10",
                     "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src)], check=True)
     info, o, out, job, phases, dt = _run(cfg, src, "A 480p 10s audio")
     assert abs(o.width - 1708) <= 32 and abs(o.height - 960) <= 32
@@ -78,27 +77,27 @@ def test_a_480p_10s_with_audio(key, cfg, tmp_path):
     assert Phase.UPLOAD in phases and Phase.DOWNLOAD in phases and (Phase.QUEUE in phases or Phase.CLOUD in phases)
 
 
-def test_c_no_audio(key, cfg, tmp_path):
+def test_c_no_audio(key, cfg, tmp_path, sample_480p):
     src = tmp_path / "c_noaudio.mp4"
-    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(SAMPLES / "sample_480p.mp4"), "-t", "3",
+    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(sample_480p), "-t", "3",
                     "-an", "-c:v", "copy", str(src)], check=True)
     info, o, out, job, phases, dt = _run(cfg, src, "C no audio")
     assert not o.has_audio and o.duration_sec > 2.5
 
 
-def test_d_korean_path(key, cfg, tmp_path):
+def test_d_korean_path(key, cfg, tmp_path, sample_480p):
     d = tmp_path / "한글 폴더"
     d.mkdir()
     src = d / "한글 영상 이름.mp4"
-    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(SAMPLES / "sample_480p.mp4"), "-t", "3",
+    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(sample_480p), "-t", "3",
                     "-c", "copy", str(src)], check=True)
     cfg.output_dir = ""
     info, o, out, job, phases, dt = _run(cfg, src, "D korean path")
     assert out == d / "한글 영상 이름_2x.mp4" and o.has_audio
 
 
-def test_cancel_during_queue(key, cfg):
-    src = SAMPLES / "sample_480p.mp4"
+def test_cancel_during_queue(key, cfg, sample_480p):
+    src = sample_480p
     provider = FalFlashVSRProvider(cfg)
     job = Job(input_path=src, scale=2, info=probe_video(src))
 

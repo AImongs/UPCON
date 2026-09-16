@@ -38,7 +38,6 @@ from upcon.core.jobs import JobStatus  # noqa: E402
 from upcon.core.probe import probe_video  # noqa: E402
 from upcon.core.tempfs import default_temp_root  # noqa: E402
 
-SAMPLES = ROOT / "tests" / "samples"
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "tests" / "out"
 OUT.mkdir(parents=True, exist_ok=True)
 WORK = Path(tempfile.mkdtemp(prefix="upcon_ui_"))
@@ -49,10 +48,23 @@ def shot(w, name: str) -> None:
     w.grab().save(str(OUT / f"{name}.png"))
 
 
+def base_clip() -> Path:
+    """테스트용 원본(854×480 / 24fps / 5초 / 오디오 있음)을 FFmpeg 로 생성한다.
+    저장소에 영상을 두지 않으므로, 새로 clone 한 환경에서도 준비 과정 없이 실행된다."""
+    dst = WORK / "_base_480p.mp4"
+    if not dst.exists():
+        subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y",
+                        "-f", "lavfi", "-i", "testsrc2=size=854x480:rate=24",
+                        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                        "-t", "5", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-shortest", str(dst)], check=True)
+    return dst
+
+
 def make(rel: str, args: list[str], src: Path | None = None) -> Path:
     dst = WORK / rel
     dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(src or SAMPLES / "sample_480p.mp4"), *args, str(dst)], check=True)
+    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(src or base_clip()), *args, str(dst)], check=True)
     return dst
 
 

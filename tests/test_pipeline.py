@@ -18,9 +18,6 @@ from upcon.core.probe import probe_video
 from upcon.core.router import Router
 from upcon.providers.local_ncnn import LocalNcnnProvider
 
-SAMPLES = Path(__file__).parent / "samples"
-
-
 @pytest.fixture(scope="module")
 def env():
     return detect_system_env()
@@ -52,10 +49,10 @@ def test_unique_output_path(tmp_path):
     assert ff.unique_output_path(src, 2).name == "scene01_2x_3.mp4"
 
 
-def test_fps_fraction():
-    info = probe_video(SAMPLES / "한글 테스트_1080p.mp4")
+def test_fps_fraction(sample_480p, sample_1080p_korean):
+    info = probe_video(sample_1080p_korean)
     assert ff.fps_fraction(info) == "30000/1001"
-    info2 = probe_video(SAMPLES / "sample_480p.mp4")
+    info2 = probe_video(sample_480p)
     assert ff.fps_fraction(info2) == "24"
 
 
@@ -69,8 +66,8 @@ def test_bmp_roundtrip(tmp_path):
     assert data[54:54 + 18] == frame[:18]
 
 
-def test_disk_plan_and_check(tmp_path):
-    info = probe_video(SAMPLES / "sample_480p.mp4")
+def test_disk_plan_and_check(tmp_path, sample_480p):
+    info = probe_video(sample_480p)
     plan = tempfs.plan_disk(info, 2, tmp_path, tmp_path / "o.mp4", temp_budget_mb=1500, chunk_min=24, chunk_max=600)
     assert 24 <= plan.chunk_frames <= 120
     tempfs.check_disk(plan, tmp_path / "o.mp4")           # 실제 디스크엔 충분
@@ -106,9 +103,9 @@ def test_availability_real_gpu(cfg, env):
 
 
 # ---------------------------------------------------------------- real upscale
-def test_upscale_480p_with_audio(cfg, env):
+def test_upscale_480p_with_audio(cfg, env, sample_480p):
     _gpu_required(env)
-    src = SAMPLES / "sample_480p.mp4"
+    src = sample_480p
     before = src.stat().st_size
     provider = LocalNcnnProvider(cfg)
     job = Job(input_path=src, scale=2, info=probe_video(src))
@@ -133,13 +130,13 @@ def test_upscale_480p_with_audio(cfg, env):
     assert not list(Path(cfg.temp_dir).glob("job_*"))          # 임시 폴더 정리
 
 
-def test_upscale_no_audio_korean_path(cfg, env, tmp_path):
+def test_upscale_no_audio_korean_path(cfg, env, tmp_path, sample_480p):
     _gpu_required(env)
     src_dir = tmp_path / "한글 폴더"
     src_dir.mkdir()
     src = src_dir / "무음 테스트.mp4"
     import subprocess
-    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(SAMPLES / "sample_480p.mp4"),
+    subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-y", "-i", str(sample_480p),
                     "-t", "2", "-an", "-c:v", "copy", str(src)], check=True)
     cfg.output_dir = ""                                        # 원본 옆에 저장
     out = LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2), lambda p: None, env)
@@ -148,9 +145,9 @@ def test_upscale_no_audio_korean_path(cfg, env, tmp_path):
     assert (o.width, o.height) == (1708, 960) and not o.has_audio
 
 
-def test_cancel_cleans_up(cfg, env):
+def test_cancel_cleans_up(cfg, env, sample_480p):
     _gpu_required(env)
-    src = SAMPLES / "sample_480p.mp4"
+    src = sample_480p
     provider = LocalNcnnProvider(cfg)
     job = Job(input_path=src, scale=2, info=probe_video(src))
 
@@ -165,20 +162,22 @@ def test_cancel_cleans_up(cfg, env):
     assert src.exists()
     # 자식 프로세스가 남지 않았는지 (ncnn/ffmpeg)
     import subprocess
-    r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq realesrgan-ncnn-vulkan.exe"], capture_output=True, text=True)
-    assert "realesrgan-ncnn-vulkan.exe" not in r.stdout
+    # tasklist 출력은 시스템 로캘 인코딩(한국어 Windows 는 cp949)이라 UTF-8 강제 환경에서 디코딩이 깨진다.
+    # 로캘과 무관하게 동작하도록 바이트로 받아서 검사한다.
+    r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq realesrgan-ncnn-vulkan.exe"], capture_output=True)
+    assert b"realesrgan-ncnn-vulkan.exe" not in (r.stdout or b"")
 
 
-def test_disk_full_detected(cfg, env, monkeypatch):
+def test_disk_full_detected(cfg, env, monkeypatch, sample_480p):
     _gpu_required(env)
     monkeypatch.setattr(tempfs, "free_disk_mb", lambda p: 50)
-    src = SAMPLES / "sample_480p.mp4"
+    src = sample_480p
     with pytest.raises(UpconError) as ei:
         LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
     assert "공간이 부족" in ei.value.user_message
 
 
-def test_hw_encoder_failure_falls_back_to_x264(cfg, env, monkeypatch):
+def test_hw_encoder_failure_falls_back_to_x264(cfg, env, monkeypatch, sample_480p):
     """하드웨어 인코더가 바로 죽어도 x264 로 자동 재시도해 성공해야 한다."""
     _gpu_required(env)
     from upcon.core import ffmpeg as ffm
@@ -194,7 +193,7 @@ def test_hw_encoder_failure_falls_back_to_x264(cfg, env, monkeypatch):
 
     monkeypatch.setattr(ffm, "start_encoder", fake_start)
     monkeypatch.setattr(ffm, "pick_encoder", lambda pref="auto": "h264_nvenc")
-    src = SAMPLES / "sample_480p.mp4"
+    src = sample_480p
     out = LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
     assert calls[0] == "h264_nvenc" and calls[-1] == "libx264"
     o = probe_video(out)
@@ -215,11 +214,11 @@ def test_missing_output_dir_falls_back_to_source_folder(tmp_path, caplog):
     assert out2.parent == src.parent
 
 
-def test_unwritable_output_dir_fails_fast(cfg, env, tmp_path):
+def test_unwritable_output_dir_fails_fast(cfg, env, tmp_path, sample_480p):
     _gpu_required(env)
     blocker = tmp_path / "file_not_dir"
     blocker.write_bytes(b"x")
-    src = SAMPLES / "sample_480p.mp4"
+    src = sample_480p
     job = Job(input_path=src, scale=2, info=probe_video(src), output_path=blocker / "sub" / "out_2x.mp4")
     import time
     t0 = time.time()

@@ -5,11 +5,8 @@ import pytest
 from upcon.core.errors import UnsupportedFileError
 from upcon.core.probe import format_bytes, probe_video
 
-SAMPLES = Path(__file__).parent / "samples"
-
-
-def test_probe_480p_with_audio():
-    info = probe_video(SAMPLES / "sample_480p.mp4")
+def test_probe_480p_with_audio(sample_480p):
+    info = probe_video(sample_480p)
     assert (info.width, info.height) == (854, 480)
     assert abs(info.fps - 24.0) < 0.01
     assert 4.9 <= info.duration_sec <= 5.1
@@ -20,8 +17,8 @@ def test_probe_480p_with_audio():
     assert info.duration_text == "00:05"
 
 
-def test_probe_korean_path_1080p_no_audio():
-    info = probe_video(SAMPLES / "한글 테스트_1080p.mp4")
+def test_probe_korean_path_1080p_no_audio(sample_1080p_korean):
+    info = probe_video(sample_1080p_korean)
     assert (info.width, info.height) == (1920, 1080)
     assert abs(info.fps - 29.97) < 0.01
     assert info.fps_text == "29.97 fps"

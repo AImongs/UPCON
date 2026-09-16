@@ -21,7 +21,6 @@ from upcon.core.router import Router
 from upcon.providers.fal_base import FalAuthError, FalBalanceError, FalNetworkError, explain_fal_error
 from upcon.providers.fal_flashvsr import ENDPOINT, FalFlashVSRProvider
 
-SAMPLES = Path(__file__).parent / "samples"
 FAKE_KEY = "12345678-abcd-4321-abcd-1234567890ab:0123456789abcdef0123456789abcdef"
 
 

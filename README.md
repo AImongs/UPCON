@@ -2,14 +2,65 @@
 
 AI 영상 2× 업스케일러 (Windows). 내 PC GPU 또는 클라우드 GPU(fal.ai, 사용자 본인 계정)로 처리한다.
 
+## 새 개발 PC 설정 (clone 후 처음 한 번)
+
+```powershell
+# 1) 저장소 가져오기  (URL 은 아직 미정 — GitHub Private repo 생성 후 교체)
+git clone https://github.com/<계정>/<저장소>.git UpCon
+cd UpCon
+
+# 2) Python 3.12 이상인지 확인
+python --version
+
+# 3) 가상환경 생성 + 활성화
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+#   PowerShell 실행 정책 때문에 막히면:
+#     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+#   활성화 없이 .\.venv\Scripts\python 을 직접 써도 된다.
+
+# 4) 의존성 설치 (개발/테스트 포함)
+python -m pip install -r requirements-dev.txt
+#   앱 실행만 할 거라면: python -m pip install -r requirements.txt
+
+# 5) 실행파일 준비 — ncnn 업스케일러 + 모델 + FFmpeg/ffprobe
+python scripts\fetch_binaries.py --ffmpeg
+
+# 6) 테스트 (테스트용 영상은 자동 생성되므로 따로 준비할 것이 없다)
+python -m pytest -q
+python tests\ui_smoke.py
+
+# 7) 실행
+python -m upcon
+```
+
+마지막으로 **fal.ai API Key 를 다시 입력해야 한다.** 키는 Windows 자격 증명 관리자에 저장되므로
+git 으로 따라오지 않는다 (의도된 동작). UPCON 실행 → 우측 상단 **⚙ 설정** → 클라우드 업스케일에서
+입력하고 "연결 테스트" 로 확인한다. 클라우드를 쓰지 않으면 이 단계는 건너뛰어도 된다.
+
+로컬(내 PC GPU) 업스케일에는 **Vulkan 을 지원하는 GPU 와 최신 그래픽 드라이버**가 필요하다.
+GPU 가 없거나 Vulkan 을 못 쓰면 로컬 처리는 비활성화되고 클라우드만 쓸 수 있다.
+
+## FFmpeg / ffprobe
+
+UPCON 은 **`bin\` 폴더에 있으면 그것을, 없으면 시스템 PATH** 의 것을 쓴다 (`upcon/core/binaries.py`).
+둘 중 하나만 있으면 된다.
+
+```powershell
+# 방법 A (권장) — 저장소 bin\ 에 동봉본을 받는다. 시스템에 FFmpeg 를 설치하지 않아도 된다.
+python scripts\fetch_binaries.py --ffmpeg      # ncnn + 모델 + ffmpeg.exe / ffprobe.exe
+python scripts\fetch_binaries.py               # --ffmpeg 를 빼면 ncnn + 모델만 받는다
+
+# 방법 B — 이미 시스템에 FFmpeg 가 설치돼 PATH 에 있으면 그대로 쓴다
+ffmpeg -version                                # 확인만 하면 된다
+```
+
+`bin\` 은 git 에 포함되지 않으므로(라이선스 txt 제외) **새 PC 마다 방법 A 또는 B 중 하나가 필요하다.**
+배포본(설치 파일)에는 `bin\` 이 항상 동봉되므로 최종 사용자는 FFmpeg 를 따로 설치하지 않는다 (STEP 7).
+
 ## 개발 환경 실행
 
 ```powershell
-# 최초 1회
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python scripts\fetch_binaries.py      # bin\realesrgan-ncnn-vulkan.exe + 공식 모델 + 라이선스
-
 # 실행
 .\.venv\Scripts\python -m upcon
 
@@ -17,23 +68,30 @@ python -m venv .venv
 .\.venv\Scripts\python -m upcon.cli 영상.mp4 [--out-dir 폴더] [--model realesr-animevideov3]
 ```
 
-FFmpeg/ffprobe 는 `bin\` 폴더에 있으면 그것을, 없으면 시스템 PATH 의 것을 사용한다 (배포본에는 동봉, STEP 7).
+## 의존성
+
+| 파일 | 용도 |
+|---|---|
+| `requirements.txt` | 런타임 — PySide6, keyring, httpx, fal-client, nvidia-ml-py |
+| `requirements-dev.txt` | 위 + pytest, pyinstaller |
+| `pyproject.toml` 의 `[convert]` | torch — `scripts/convert_compact_to_ncnn.py` 로 모델을 다시 변환할 때만 |
+
+`tests/test_packaging.py` 가 **코드의 실제 import 와 의존성 선언을 자동으로 대조**한다.
+새 import 를 추가하고 선언을 빠뜨리면 테스트가 실패하므로, "내 PC 에서만 되는" 상태를 막는다.
 
 ## 테스트
 
 ```powershell
-.\.venv\Scripts\python -m pip install pytest
 .\.venv\Scripts\python -m pytest -q          # 단위 + 실제 GPU 업스케일/취소/디스크/배치 테스트 (약 90초)
 .\.venv\Scripts\python tests\ui_smoke.py     # 실제 UI 배치 시나리오 A~N 자동 테스트 + 스크린샷 (tests\out)
 .\.venv\Scripts\python -m pytest tests/integration -q --run-cloud   # 실제 fal.ai API (비용 발생, 키 없으면 skip)
 ```
 
-테스트 영상은 ffmpeg 로 생성한다 (`tests\samples\`, git 제외):
-
-```powershell
-ffmpeg -y -f lavfi -i "testsrc2=size=854x480:rate=24" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 5 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest tests\samples\sample_480p.mp4
-ffmpeg -y -f lavfi -i "testsrc2=size=1920x1080:rate=30000/1001" -t 3 -c:v libx264 -pix_fmt yuv420p "tests\samples\한글 테스트_1080p.mp4"
-```
+**테스트 영상은 저장소에 두지 않는다.** pytest fixture(`tests/conftest.py`)와 `ui_smoke.py` 가
+FFmpeg 로 필요한 합성 영상(854×480 24fps 5초 오디오 있음 / 1920×1080 29.97fps 무음 / 한글 경로)을
+임시 폴더에 만들고 세션이 끝나면 정리한다. 따라서 clone 직후 바로 `pytest` 를 돌릴 수 있다.
+FFmpeg/ffprobe 가 없으면 영상이 필요한 테스트만 skip 되고 나머지는 실행된다.
+GPU(Vulkan)가 없으면 실제 업스케일 테스트는 skip 된다.
 
 ## 폴더 구조
 

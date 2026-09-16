@@ -1,0 +1,5 @@
+# UPCON 개발/테스트 전용 (런타임에는 불필요)
+-r requirements.txt
+
+pytest>=8,<10             # 단위 + 실제 GPU/배치 테스트
+pyinstaller>=6.22         # STEP 7 배포 빌드

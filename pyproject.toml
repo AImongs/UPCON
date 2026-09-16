@@ -4,14 +4,21 @@ version = "0.3.0"
 description = "UPCON - AI Video Upscaler (Windows)"
 requires-python = ">=3.12"
 dependencies = [
-    "PySide6>=6.11",
+    "PySide6>=6.11,<7",
+    "keyring>=25,<26",
+    "httpx>=0.27,<1.0",
+    "fal-client>=1.0,<2",
     "nvidia-ml-py>=12",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8",
+    "pytest>=8,<10",
     "pyinstaller>=6.22",
+]
+# 모델 변환 전용 (scripts/convert_compact_to_ncnn.py). 앱 실행에는 불필요.
+convert = [
+    "torch>=2.4",
 ]
 
 [tool.pytest.ini_options]

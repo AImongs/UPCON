@@ -17,7 +17,6 @@ from upcon.core.jobs import CancelledError, Job, JobManager, JobStatus, Phase, P
 from upcon.core.power import KeepAwake
 from upcon.core.probe import VideoInfo, probe_video
 
-SAMPLES = Path(__file__).parent / "samples"
 
 
 def _info(path: Path, frames: int) -> VideoInfo:
@@ -226,7 +225,7 @@ def test_keep_awake_real_api():
 
 
 # ---------------------------------------------------------------- 실제 GPU 3개 연속
-def test_real_batch_three_clips(tmp_path):
+def test_real_batch_three_clips(tmp_path, sample_480p):
     env = detect_system_env()
     if not env.primary_gpu or not env.primary_gpu.vulkan_available:
         pytest.skip("Vulkan GPU 없음")
@@ -235,7 +234,7 @@ def test_real_batch_three_clips(tmp_path):
     cfg.temp_dir = str(tmp_path / "tmp")
     provider = LocalNcnnProvider(cfg)
     srcs = []
-    base = SAMPLES / "sample_480p.mp4"
+    base = sample_480p
     specs = [("한글 폴더/첫 번째.mp4", ["-t", "2", "-c", "copy"]),
              ("b/second.mov", ["-t", "2", "-c:v", "copy", "-c:a", "pcm_s16le"]),
              ("c/third_silent.mp4", ["-t", "2", "-an", "-c:v", "copy"])]
