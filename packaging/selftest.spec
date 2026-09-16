@@ -11,8 +11,17 @@ BIN_DIR = ROOT / "bin"
 
 datas = [
     (str(ROOT / "upcon" / "resources" / "styles.qss"), "upcon/resources"),
+    # 정보(About) 화면의 "제3자 라이선스 전문" 이 번들 안에서 직접 읽는다.
     (str(ROOT / "docs" / "THIRD_PARTY_NOTICES.md"), "docs"),
 ]
+
+# 앱 아이콘: 아직 최종 디자인이 없다. upcon/resources/upcon.ico 를 넣으면
+# 실행 파일 아이콘과 창 아이콘에 자동으로 쓰이고, 향후 Inno Setup 도 같은 파일을 참조한다.
+# 파일이 없으면 icon=None 으로 기본 아이콘으로 정상 빌드된다.
+ICON = ROOT / "upcon" / "resources" / "upcon.ico"
+APP_ICON = str(ICON) if ICON.is_file() else None
+if APP_ICON:
+    datas.append((str(ICON), "upcon/resources"))
 for f in sorted(BIN_DIR.iterdir()):
     if f.is_file():
         datas.append((str(f), "bin"))
@@ -112,7 +121,7 @@ exe = EXE(
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     console=True, disable_windowed_traceback=False, argv_emulation=False,
     target_arch=None, codesign_identity=None, entitlements_file=None,
-    icon=None,
+    icon=APP_ICON,
 )
 
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, upx_exclude=[], name="UPCON-selftest")

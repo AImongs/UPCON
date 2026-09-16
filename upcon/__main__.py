@@ -6,14 +6,14 @@ import logging
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
 from upcon import APP_NAME, APP_VERSION
 from upcon.app.main_window import MainWindow
 from upcon.core.config import AppConfig
 from upcon.core.logging_setup import setup_logging
-from upcon.core.paths import resources_dir
+from upcon.core.paths import app_icon_file, resources_dir
 
 
 def _load_stylesheet() -> str:
@@ -34,6 +34,9 @@ def create_app(argv: list[str] | None = None) -> tuple[QApplication, MainWindow]
     app.setOrganizationName(APP_NAME)
     app.setFont(QFont("Segoe UI", 10))
     app.setStyleSheet(_load_stylesheet())
+    icon = app_icon_file()          # 아이콘 파일이 없으면 기본 아이콘으로 동작한다
+    if icon is not None:
+        app.setWindowIcon(QIcon(str(icon)))
 
     window = MainWindow(AppConfig.load())
     return app, window

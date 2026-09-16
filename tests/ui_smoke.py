@@ -27,9 +27,11 @@ os.environ["UPCON_DATA_DIR"] = DATA_DIR
 
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QTimer, QUrl  # noqa: E402
 from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent  # noqa: E402
-from PySide6.QtWidgets import QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QLabel, QMessageBox, QPlainTextEdit  # noqa: E402
 
+from upcon import APP_NAME, APP_VERSION  # noqa: E402
 from upcon.__main__ import create_app  # noqa: E402
+from upcon.app.about_dialog import AboutDialog, NoticesDialog  # noqa: E402
 from upcon.app.cloud_settings import CloudSettingsDialog  # noqa: E402
 from upcon.core import credentials  # noqa: E402
 from upcon.core import ffmpeg as ff  # noqa: E402
@@ -101,6 +103,10 @@ def main() -> int:
             elif isinstance(w, CloudSettingsDialog) and w.isVisible():
                 shot(w, "12_cloud_settings")
                 captured.append("settings-dialog")
+                w.reject()
+            elif isinstance(w, AboutDialog) and w.isVisible():
+                shot(w, "13_about")
+                captured.append("about-dialog")
                 w.reject()
     poll = QTimer()
     poll.timeout.connect(auto_close)
@@ -273,6 +279,24 @@ def main() -> int:
         win._open_settings()
         assert "settings-dialog" in captured
         ok("설정 대화상자 OK")
+        win._open_about()
+        assert "about-dialog" in captured, "정보(About) 대화상자가 뜨지 않았다"
+        about = AboutDialog(win)                      # 표시 내용 검증
+        about_text = " ".join(l.text() for l in about.findChildren(QLabel))
+        for token in (APP_NAME, APP_VERSION, "FFmpeg", "GPLv3", "Real-ESRGAN"):
+            assert token in about_text, f"About 화면에 {token} 없음"
+        nd = NoticesDialog(about)                     # 제3자 라이선스 전문 창
+        nd.show()
+        app.processEvents()
+        shot(nd, "14_third_party_licenses")
+        body = nd.findChild(QPlainTextEdit).toPlainText()
+        for token in ("UPCON", "FFmpeg", "GPL", "Real-ESRGAN", "ncnn", "제3자"):
+            assert token in body, f"라이선스 전문에 {token} 없음"
+        assert "열지 못했습니다" not in body, "고지 문서를 읽지 못했다"
+        assert "�" not in body, "라이선스 전문 한글 깨짐"
+        nd.close()
+        about.close()
+        ok(f"정보(About) v{APP_VERSION} + 제3자 라이선스 전문 OK (본문 {len(body):,}자, 한글 정상)")
         s6()
 
     # ---- 6) M: 앱 재시작 복원 ----

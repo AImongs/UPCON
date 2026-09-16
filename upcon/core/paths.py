@@ -29,6 +29,19 @@ def bundled_models_dir() -> Path:
     return project_root() / "models"
 
 
+def notices_file() -> Path:
+    """제3자 라이선스 고지 문서. 개발 트리와 PyInstaller 번들 양쪽에서 같은 상대 위치."""
+    return project_root() / "docs" / "THIRD_PARTY_NOTICES.md"
+
+
+def app_icon_file() -> Path | None:
+    """앱 아이콘(.ico). 아직 최종 디자인이 없으므로 파일이 없으면 None 을 돌려주고
+    기본 아이콘으로 동작한다. 나중에 upcon/resources/upcon.ico 하나만 넣으면
+    실행 파일(PyInstaller)과 창 아이콘, 향후 Installer 가 모두 이 파일을 쓴다."""
+    p = resources_dir() / "upcon.ico"
+    return p if p.is_file() else None
+
+
 def user_data_dir() -> Path:
     """설정·로그 저장 위치: %LOCALAPPDATA%\\UPCON (테스트는 UPCON_DATA_DIR 환경변수로 격리)"""
     override = os.environ.get("UPCON_DATA_DIR")

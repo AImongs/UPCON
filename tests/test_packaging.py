@@ -103,3 +103,53 @@ def test_no_video_files_tracked_in_repo():
     bad = [f for f in r.stdout.splitlines()
            if Path(f).suffix.lower() in (".mp4", ".mov", ".mkv", ".avi", ".webm")]
     assert not bad, f"영상 파일이 추적되고 있음: {bad}"
+
+
+def test_version_single_source_of_truth():
+    """버전 문자열은 upcon/version.py 한 곳에서 온다. pyproject 와 어긋나면 실패한다."""
+    import tomllib
+
+    from upcon import APP_VERSION
+    from upcon.version import __version__
+
+    assert APP_VERSION == __version__, "upcon.APP_VERSION 이 version.py 와 다르다"
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert data["project"]["version"] == __version__, (
+        f"pyproject.toml version={data['project']['version']} != "
+        f"upcon/version.py {__version__} — 한쪽만 올리면 About 화면과 배포본 버전이 어긋난다")
+
+
+def test_notices_file_resolvable_without_absolute_path():
+    """제3자 라이선스 문서는 project_root() 기준 상대 위치로 찾을 수 있어야 한다.
+    (개발 트리와 PyInstaller 번들 모두 같은 코드 경로를 쓴다.)"""
+    from upcon.core.paths import notices_file, project_root
+
+    p = notices_file()
+    assert p.is_file(), f"고지 문서 없음: {p}"
+    assert p.is_relative_to(project_root()), "project_root() 밖을 가리키면 번들에서 깨진다"
+    text = p.read_text(encoding="utf-8")
+    assert "FFmpeg" in text and "GPL" in text
+    assert "Real-ESRGAN" in text
+
+
+def test_app_icon_optional():
+    """아이콘 파일이 없어도 None 을 돌려주고 빌드/실행이 되어야 한다."""
+    from upcon.core.paths import app_icon_file, resources_dir
+
+    icon = app_icon_file()
+    assert icon is None or icon == resources_dir() / "upcon.ico"
+    if icon is not None:
+        assert icon.is_file()
+
+
+def test_about_dialog_texts_have_required_notices():
+    """About 화면이 FFmpeg/GPL/제3자 사실을 명시해야 한다.
+    확정되지 않은 Corresponding Source URL 을 넣지 않았는지도 확인한다."""
+    import re
+
+    from upcon.app.about_dialog import THIRD_PARTY_SUMMARY
+
+    for token in ("FFmpeg", "GPLv3", "Real-ESRGAN", "ncnn", "제3자"):
+        assert token in THIRD_PARTY_SUMMARY, f"About 고지에 {token} 누락"
+    urls = re.findall(r"https?://\S+", THIRD_PARTY_SUMMARY)
+    assert not urls, f"확정되지 않은 URL 이 About 고지에 있다: {urls}"

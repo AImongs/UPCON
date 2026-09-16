@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from upcon import APP_NAME, APP_TAGLINE, APP_VERSION
+from upcon.app.about_dialog import AboutDialog
 from upcon.app.cloud_settings import CloudSettingsDialog
 from upcon.app.controller import Controller
 from upcon.app.widgets.options_panel import OptionsPanel
@@ -95,6 +96,12 @@ class MainWindow(QMainWindow):
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.clicked.connect(self._open_settings)
         header.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self.about_btn = QToolButton()
+        self.about_btn.setObjectName("settingsButton")
+        self.about_btn.setText("정보")
+        self.about_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.about_btn.clicked.connect(self._open_about)
+        header.addWidget(self.about_btn, 0, Qt.AlignmentFlag.AlignTop)
         lay.addLayout(header)
 
         # 대기열
@@ -373,6 +380,9 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["explorer", "/select,", str(target)])
         elif target:
             os.startfile(str(target.parent))
+
+    def _open_about(self) -> None:
+        AboutDialog(self).exec()
 
     def _open_settings(self) -> None:
         dlg = CloudSettingsDialog(self.config, self.controller.cloud_endpoint(), self)

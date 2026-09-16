@@ -231,6 +231,53 @@ def main() -> int:
         fails.append(f"소프트웨어 폴백 실패: {type(e).__name__}: {e}")
     _ff._hw_encoder_cache.clear()
 
+    line("12) 정보(About) + 제3자 라이선스 (frozen)")
+    try:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit
+        from upcon import APP_NAME, APP_VERSION
+        from upcon.app.about_dialog import AboutDialog, NoticesDialog
+        from upcon.core.paths import notices_file, project_root
+        _app = QApplication.instance() or QApplication([])
+
+        nf = notices_file()
+        print("고지 문서 :", nf)
+        print("  번들 내부:", str(nf).lower().startswith(str(project_root()).lower()))
+        print("  존재     :", nf.is_file())
+        if not nf.is_file():
+            fails.append("번들에 THIRD_PARTY_NOTICES.md 없음")
+
+        dlg = AboutDialog(None)
+        about_text = " ".join(l.text() for l in dlg.findChildren(QLabel))
+        print(f"About 표시: {APP_NAME} v{APP_VERSION}")
+        for token in (APP_NAME, APP_VERSION, "FFmpeg", "GPLv3", "Real-ESRGAN", "ncnn"):
+            if token not in about_text:
+                fails.append(f"About 화면에 {token} 없음")
+        nd = NoticesDialog(dlg)
+        body = nd.findChild(QPlainTextEdit).toPlainText()
+        print(f"라이선스 전문: {len(body):,}자")
+        for token in ("UPCON", "FFmpeg", "GPL", "Real-ESRGAN", "ncnn", "제3자"):
+            if token not in body:
+                fails.append(f"라이선스 전문에 {token} 없음")
+        if "열지 못했습니다" in body:
+            fails.append("번들에서 고지 문서를 읽지 못함")
+        if "�" in body:
+            fails.append("라이선스 전문 한글 깨짐")
+        print("  한글 표시:", "정상" if "제3자" in body and "�" not in body else "깨짐")
+        # frozen 빌드에서 실제로 렌더링된 모습을 이미지로 남긴다 (offscreen 렌더)
+        dlg.resize(560, 470); nd.resize(820, 640)
+        _app.processEvents()
+        for widget, fname in ((dlg, "portable_about.png"), (nd, "portable_notices.png")):
+            shot_path = work / fname
+            if widget.grab().save(str(shot_path)):
+                print("  스크린샷:", shot_path.name, f"({shot_path.stat().st_size:,} bytes)")
+            else:
+                fails.append(f"{fname} 저장 실패")
+        nd.deleteLater(); dlg.deleteLater()
+    except Exception as e:
+        fails.append(f"About/라이선스 실패: {type(e).__name__}: {e}")
+        print("오류:", type(e).__name__, e)
+
     line("결과")
     if fails:
         for f in fails:
