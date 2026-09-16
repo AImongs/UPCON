@@ -181,3 +181,96 @@ def test_real_windows_keyring_roundtrip():
     kr.delete_password(svc, user)
     assert kr.get_password(svc, user) is None
     assert credentials.backend_name() == "WinVaultKeyring"
+
+
+# ------------------------------------------------- 유료 submit 은 재시도하지 않는다 (이중 과금 방지)
+def test_submit_once_never_retries_on_transport_error():
+    """fal_client.submit() 은 TransportError 에 최대 10회 재시도한다 → 큐에 들어간 뒤 응답만 유실되면
+    두 번째 유료 요청이 만들어질 수 있다. UPCON 의 submit_once 는 정확히 1회만 POST 해야 한다."""
+    from upcon.providers.fal_base import FalApi
+
+    calls = []
+
+    class FakeHttpx:
+        def request(self, method, url, **kw):
+            calls.append((method, url))
+            raise httpx.ConnectError("connection reset")
+
+    class FakeClient:
+        _client = FakeHttpx()
+
+    api = FalApi(key=FAKE_KEY)
+    with pytest.raises(httpx.ConnectError):
+        api.submit_once(FakeClient(), ENDPOINT, {"video_url": "https://x/y.mp4"})
+    assert len(calls) == 1, f"유료 submit 이 {len(calls)}회 전송됨 (1회여야 함)"
+    assert calls[0][0] == "POST" and ENDPOINT in calls[0][1]
+
+
+def test_submit_once_does_not_retry_on_429():
+    """429 도 재시도하지 않는다 — 재시도 판단은 사용자/호출 측이 한다."""
+    from upcon.providers.fal_base import FalApi
+
+    calls = []
+
+    class FakeHttpx:
+        def request(self, method, url, **kw):
+            calls.append(url)
+            return httpx.Response(429, json={"detail": "rate limited"},
+                                  request=httpx.Request(method, url))
+
+    class FakeClient:
+        _client = FakeHttpx()
+
+    api = FalApi(key=FAKE_KEY)
+    with pytest.raises(FalClientHTTPError):
+        api.submit_once(FakeClient(), ENDPOINT, {"video_url": "https://x/y.mp4"})
+    assert len(calls) == 1, f"유료 submit 이 {len(calls)}회 전송됨 (1회여야 함)"
+
+
+def test_provider_submit_transport_failure_message_warns_about_possible_request(tmp_path, monkeypatch):
+    """전송 실패 시 자동 재시도 대신, 요청이 접수됐을 수 있음을 사용자에게 알려야 한다."""
+    import upcon.providers.fal_base as fb
+    from upcon.core.jobs import Job
+
+    src_file = tmp_path / "clip.mp4"
+    src_file.write_bytes(b"0" * 1024)
+    info = VideoInfo(path=src_file, width=854, height=480, fps=24, duration_sec=10,
+                     size_bytes=1024, video_codec="h264", has_audio=True, nb_frames=240)
+
+    class FakeClient:
+        def upload_file(self, path, lifecycle=None):
+            return "https://cdn.example/uploaded.mp4"
+
+    monkeypatch.setattr(fb.credentials, "get_fal_key", lambda: FAKE_KEY)
+    monkeypatch.setattr(fb.FalApi, "client", lambda self: FakeClient())
+    monkeypatch.setattr(fb.FalApi, "submit_once",
+                        lambda self, c, e, a, headers=None: (_ for _ in ()).throw(httpx.ConnectError("reset")))
+
+    cfg = AppConfig()
+    cfg.temp_dir = str(tmp_path / "tmp")
+    job = Job(input_path=src_file, scale=2, info=info)
+    with pytest.raises(Exception) as ei:
+        FalFlashVSRProvider(cfg).upscale(job, lambda _p: None)
+    msg = getattr(ei.value, "user_message", str(ei.value))
+    assert "자동으로 다시 보내지 않았습니다" in msg, msg
+    assert "확인" in msg
+    # 실패했으므로 결과 파일이 남지 않아야 한다
+    assert not (tmp_path / "clip_2x.mp4").exists()
+
+
+def test_connection_test_reports_locked_account_before_upload(monkeypatch):
+    """단가 조회는 되지만 계정이 잠긴(잔액 소진) 경우, 연결 테스트가 실패로 보고해야 한다.
+    (실제로 겪은 문제: '연결 완료' 로 표시된 뒤 영상 업로드 단계에서야 403 으로 실패)"""
+    from upcon.providers.fal_base import FalApi
+
+    api = FalApi(key=FAKE_KEY)
+    monkeypatch.setattr(FalApi, "get_unit_price", lambda self, ep: (0.0005, "megapixels"))
+
+    def locked(self):
+        raise FalClientHTTPError("User is locked. Reason: Exhausted balance.", 403, {},
+                                 httpx.Response(403, request=httpx.Request("POST", "https://rest.fal.ai/x")))
+    monkeypatch.setattr(FalApi, "verify_key_inference_scope", locked)
+
+    r = api.test_connection(ENDPOINT)
+    assert r.ok is False
+    assert "잔액" in r.message or "결제" in r.message

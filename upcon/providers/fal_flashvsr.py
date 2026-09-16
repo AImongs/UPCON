@@ -29,7 +29,7 @@ from upcon.core.errors import UpconError
 from upcon.core.jobs import CancelledError, Job, Phase, Progress, ProgressCallback
 from upcon.core.probe import VideoInfo, format_bytes, probe_video
 from upcon.providers.base import Availability, Estimate, UpscalerProvider
-from upcon.providers.fal_base import FalApi, explain_fal_error
+from upcon.providers.fal_base import FalApi, FalNetworkError, explain_fal_error
 
 log = logging.getLogger(__name__)
 
@@ -116,9 +116,16 @@ class FalFlashVSRProvider(UpscalerProvider):
             args.update(self.config.cloud_extra_args or {})
             headers = {"X-Fal-Object-Lifecycle-Preference": json.dumps({"expiration_duration_seconds": 7 * 86400})}
             try:
-                handle = client.submit(self.endpoint, arguments=args, headers=headers)
+                # 과금 지점: 자동 재시도 없이 정확히 1회만 전송 (이중 과금 방지)
+                handle = api.submit_once(client, self.endpoint, args, headers=headers)
             except Exception as e:  # noqa: BLE001
-                raise explain_fal_error(e)
+                err = explain_fal_error(e)
+                if isinstance(err, FalNetworkError):
+                    err = UpconError(
+                        "클라우드에 요청을 보내는 중 연결이 끊겼습니다. 요청이 접수됐을 수 있으니 "
+                        "자동으로 다시 보내지 않았습니다. fal.ai 대시보드에서 요청 상태를 확인한 뒤 다시 시도해 주세요.",
+                        f"submit transport failure (not retried): {err.detail}")
+                raise err
             job.note = ""
             log.info("fal submitted request (id=%s)", handle.request_id)
 

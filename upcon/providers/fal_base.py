@@ -11,7 +11,10 @@ import logging
 from dataclasses import dataclass
 
 import httpx
-from fal_client.client import FalClientError, FalClientHTTPError, FalClientTimeoutError, SyncClient
+from fal_client.client import (
+    QUEUE_URL_FORMAT, FalClientError, FalClientHTTPError, FalClientTimeoutError, SyncClient,
+    SyncRequestHandle, _raise_for_status,
+)
 
 from upcon.core import credentials
 from upcon.core.errors import UpconError
@@ -103,6 +106,34 @@ class FalApi:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Key {self._require_key()}", "User-Agent": _UA}
 
+    # ---- 유료 추론 요청 ----
+    def submit_once(self, client: SyncClient, endpoint: str, arguments: dict,
+                    headers: dict[str, str] | None = None) -> SyncRequestHandle:
+        """과금되는 추론 요청을 **정확히 한 번만** 보낸다 (SDK 자동 재시도 우회).
+
+        fal_client 의 submit() 은 내부적으로 _maybe_retry_request 를 거쳐 전송 오류(TransportError)·
+        타임아웃·408/409/429 에 대해 최대 MAX_ATTEMPTS(10) 회까지 POST 를 재전송한다.
+        서버가 요청을 큐에 넣은 뒤 응답만 유실된 경우, 이 재시도는 **두 번째 유료 요청**을 만들어
+        이중 과금이 될 수 있다. 따라서 과금 지점인 submit 만은 재시도 없이 1회만 POST 한다.
+        (CDN 업로드·상태 조회·결과 조회의 재시도는 추론 과금과 무관하므로 그대로 둔다.)
+
+        전송 실패 시에도 서버에 요청이 들어갔을 가능성이 있으므로, 호출 측은 자동 재시도 대신
+        사용자에게 확인을 요구해야 한다.
+        """
+        url = QUEUE_URL_FORMAT + endpoint
+        hc = client._client          # 인증/UA 헤더가 설정된 httpx.Client
+        response = hc.request("POST", url, json=arguments, headers=headers or {}, timeout=self.timeout)
+        _raise_for_status(response)
+        data = response.json()
+        log.info("fal submit (single attempt, no retry): %s", endpoint)
+        return SyncRequestHandle(
+            request_id=data["request_id"],
+            response_url=data["response_url"],
+            status_url=data["status_url"],
+            cancel_url=data["cancel_url"],
+            client=hc,
+        )
+
     # ---- Platform API ----
     def get_unit_price(self, endpoint: str) -> tuple[float, str]:
         """(unit_price, unit). 인증 필요 → 키 검증에도 쓴다."""
@@ -142,6 +173,15 @@ class FalApi:
                     err = explain_fal_error(e2)
             log.warning("fal connection test failed: %s", err.detail)
             return ConnectionTestResult(False, err.user_message)
+        # 단가 조회(Platform API)가 되더라도 계정이 잠겨 있으면 추론은 실패한다.
+        # CDN 토큰 발급은 추론 경로와 같은 인증/계정 상태를 거치며 무료이므로, 여기서 미리 걸러
+        # 사용자가 영상을 업로드한 뒤에야 실패를 알게 되는 일을 막는다. (잔액 소진 → 403 User is locked)
+        try:
+            self.verify_key_inference_scope()
+        except Exception as e:  # noqa: BLE001
+            err = explain_fal_error(e)
+            log.warning("fal key ok for pricing but not usable for inference: %s", err.detail)
+            return ConnectionTestResult(False, err.user_message, price, unit)
         log.info("fal connection ok: %s unit_price=%s/%s", endpoint, price, unit)
         return ConnectionTestResult(True, "fal.ai 연결 완료", price, unit)
 
