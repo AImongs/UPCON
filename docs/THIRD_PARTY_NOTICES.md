@@ -35,7 +35,10 @@ UPCON 본체(Python)는 `subprocess` + 파이프/명령행 인자로만 통신�
 2. 프로그램 "정보" 화면에 FFmpeg 사용 사실과 라이선스 고지 — **미구현 (installer 단계)**
 3. **Corresponding Source 제공** — 동봉한 바이너리와 정확히 대응하는 소스를,
    배포본과 같은 위치에서 내려받게 하거나 3년간 유효한 서면 제안으로 제공 (GPLv3 §6)
-   → **실제 배포 URL/방식은 installer 단계에서 확정 예정. 현재 미확정.**
+   → **소스 패키지는 준비 완료.** `scripts/build_ffmpeg_source_package.py` 가
+   `UPCON-FFmpeg-Corresponding-Source-<version>.zip` 을 생성한다 (FFmpeg 소스 + BtbN 빌드
+   스크립트 스냅샷 + GPL 구성요소 소스 + 라이선스 + BUILD-INFO + SOURCE-MANIFEST).
+   → **실제 배포 URL/호스팅 방식은 아직 미확정.** 배포 시 설치 파일과 같은 위치에 올려야 한다.
 4. **빌드 설정 정보 제공** — `ffmpeg -version` 의 configure 라인, BtbN 빌드 스크립트 출처
    (고정 태그: `autobuild-2026-09-15-13-18`, `scripts/fetch_binaries.py` 에 URL·SHA-256 기록)
 5. 수강생 대상 유료 강의 배포도 GPL 상 "conveying" 에 해당하므로 위 의무가 동일하게 적용된다.

@@ -180,6 +180,36 @@ subprocess.run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
 `UPCON-selftest`(packaging/selftest.py) 네임스페이스만 쓴다.
 실제 fal credential(서비스 이름 `UPCON`)은 **읽지도 삭제하지도 않는다.**
 
+### FFmpeg Corresponding Source (GPLv3 대응)
+
+동봉 FFmpeg 는 `--enable-gpl --enable-version3` 빌드라 **GPLv3** 가 적용된다.
+바이너리를 재배포하는 쪽(= UPCON)이 대응 소스를 제공할 의무를 진다 (GPLv3 §6).
+BtbN 저장소에는 준수 문구도 패키징된 소스도 없으므로 직접 모아 둔다.
+
+```powershell
+.\.venv\Scripts\python scripts\build_ffmpeg_source_package.py
+# -> dist-ffmpeg-source\UPCON-FFmpeg-Corresponding-Source-<version>.zip
+```
+
+스크립트는 `bin\ffmpeg.exe` 의 실제 버전이 `scripts/fetch_binaries.py` 의 고정값과
+일치하는지 먼저 확인하고(불일치면 중단), 다음을 한 묶음으로 만든다.
+
+| 항목 | 내용 |
+|---|---|
+| FFmpeg 소스 | 정확한 upstream commit |
+| BtbN 빌드 스크립트 | 정확한 commit 스냅샷 — 127개 의존성의 고정 리비전이 여기 들어 있다 |
+| GPL 구성요소 소스 | x264, x265, vidstab, frei0r, rubberband, zvbi, xavs2 |
+| LICENSE / COPYING | 각 프로젝트 원문 |
+| `BUILD-INFO.txt` | 버전·commit·빌드태그·configure·툴체인·원본 zip SHA-256·동봉 파일 해시 |
+| `SOURCE-MANIFEST.txt` | component 별 upstream·리비전·라이선스·아카이브·SHA-256 + 127개 의존성 고정값 전체 |
+
+**xvid 는 자동 수집되지 않는다.** Subversion 저장소(rev 고정)라 git tarball 이 없다.
+`BUILD-INFO.txt` 에 정확한 SVN URL·리비전과 체크아웃 명령을 기록한다.
+downloads.xvid.com 의 릴리스 tarball 은 **다른 리비전이라 이 바이너리에 대응하지 않는다.**
+
+FFmpeg 버전을 올리면 `scripts/fetch_binaries.py` 의 고정값을 바꾼 뒤 이 스크립트를 다시 돌리면 된다.
+생성된 ZIP 은 `dist-*/` 라 git 에 포함되지 않는다.
+
 ## 의존성
 
 | 파일 | 용도 |
