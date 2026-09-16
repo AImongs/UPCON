@@ -182,6 +182,123 @@ subprocess.run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
 
 ### FFmpeg Corresponding Source (GPLv3 대응)
 
+동봉 FFmpeg 는 `--enable-gpl --enable-version3` 빌드라 **GPLv3** 가 적용되고,
+바이너리를 재배포하는 쪽(= UPCON)이 대응 소스를 제공할 의무를 진다 (GPLv3 §6).
+BtbN 저장소에는 준수 문구도 패키징된 소스도 없으므로 직접 모은다.
+
+```powershell
+.\.venv\Scripts\python scripts\build_ffmpeg_source_package.py
+# -> dist-ffmpeg-source\UPCON-FFmpeg-Corresponding-Source-<version>.zip
+```
+
+**용량보다 완전성을 우선한다.** 현재 결과는 약 944 MB (해제 951 MB, 264 파일).
+
+#### 분류 기준
+
+BtbN 빌드 시스템의 `ffbuild_enabled()` 를 우리 빌드 조건(`TARGET=win64`,
+`VARIANT=gpl-shared`, ffver 801)으로 실제 평가해서 나눈다. 추측하지 않는다.
+
+| | 의미 | 처리 |
+|---|---|---|
+| **A** | 이 바이너리에 컴파일/정적 링크됨 | **소스 수집** (96개) |
+| **B** | System Library | 제외 + `SYSTEM-LIBRARIES.txt` 에 근거 기록 |
+| **C** | 빌드 도구/레시피 | BtbN 스냅샷으로 보존 (patch 포함) |
+| **D** | 이 빌드와 무관 (다른 타깃/변형) | 제외 + 사유 기록 |
+
+애매하면 보수적으로 A 로 둔다. 확신 없는 것을 임의로 빼지 않는다.
+
+System Libraries 판단은 "Microsoft 것이라서"가 아니라 **실제 PE import 테이블을 읽어서**
+한다. 동봉 DLL/EXE 가 import 하는 외부 DLL 을 전부 뽑아 `SYSTEM-LIBRARIES.txt` 에 기록한다
+(현재 45개, 모두 Windows 기본 구성요소이며 배포본에 동봉되지 않는다).
+
+#### 수집 방식
+
+| 호스트 | 방법 |
+|---|---|
+| github / gitlab / googlesource / savannah | 리비전 지정 tarball |
+| 그 외 git 호스트 | `git archive` (얕은 clone) |
+| **SVN (xvid, lame)** | **WebDAV `!svn/bc/<rev>/` 로 정확한 리비전 export** (svn 클라이언트 불필요) |
+
+xvid 는 `svn.xvid.org` **rev 2204**, lame 은 `svn.code.sf.net` **rev 6761** 로 고정 수집한다.
+릴리스 tarball 은 리비전이 달라 이 바이너리에 대응하지 않으므로 쓰지 않는다.
+
+#### 완전성 검사 (경고가 아니라 **실패**)
+
+다음 중 하나라도 걸리면 아카이브를 **만들지 않고** exit 1 로 끝난다.
+필수 component 누락 / 리비전 미고정 / 라이선스 누락 / 체크섬 불일치 /
+수집 실패 / BtbN 스냅샷에 `patches/`·`scripts.d/` 누락 / 바이너리↔메타데이터 불일치.
+
+별도 라이선스 파일이 upstream 에 아예 없는 component 는 `LICENSE_IN_SOURCE` 에
+**근거와 함께** 명시적으로 예외 등록한다 (현재 `ffnvcodec` 1건: MIT 고지가 각 헤더
+상단 주석에 들어 있음을 확인).
+
+재실행 속도를 위해 `dist-ffmpeg-source/_cache/` 에 다운로드를 캐시한다 (지워도 무방).
+생성물은 `dist-*/` 라 git 에 포함되지 않는다.
+
+## Windows Installer (Inno Setup)
+
+```powershell
+# 1) Portable 빌드 먼저
+.\.venv\Scripts\python -m PyInstaller packaging\upcon.spec --noconfirm
+
+# 2) 설치 파일 생성 (버전은 upcon/version.py 에서 읽어 ISCC 에 주입)
+.\.venv\Scripts\python packaging\build_installer.py
+# -> dist-installer\UPCON_Setup_<version>.exe
+
+# 3) 안전장치 정적 검증 (설치는 하지 않는다)
+.\.venv\Scripts\python packaging\test_installer.py
+```
+
+`packaging/upcon.iss` 는 검증된 `dist\UPCON` 을 그대로 설치한다 (내부 구조 재조립 없음).
+
+* **per-user 설치** — `PrivilegesRequired=lowest`, 기본 경로 `%LOCALAPPDATA%\Programs\UPCON`.
+  관리자 권한(UAC)을 요구하지 않는다. UPCON 은 서비스·드라이버·시스템 통합이 없고
+  사용자 데이터도 `%LOCALAPPDATA%` 에 쓰므로 관리자 권한이 필요할 이유가 없다.
+* **AppId 고정** — `{B04C51EA-...}` 를 바꾸면 업그레이드가 아니라 별도 설치가 된다. 절대 변경 금지.
+* 사용자 데이터는 설치 폴더가 아니라 `%LOCALAPPDATA%\UPCON`, API Key 는 Windows 자격 증명 관리자.
+
+### 제거 정책
+
+| 대상 | 기본 동작 |
+|---|---|
+| 프로그램 파일 · 바로가기 · 레지스트리 항목 | 제거 |
+| `%LOCALAPPDATA%\UPCON` (설정 · 대기열 · 로그) | **보존** |
+| fal.ai API Key (자격 증명 관리자) | **보존** |
+| 업스케일 결과 영상 | **절대 삭제하지 않음** (원본 옆에 저장되므로 애초에 대상 아님) |
+
+대화형 제거에서 사용자가 **명시적으로 [예]** 를 선택했을 때만 사용자 데이터와 API Key 를 함께 지운다.
+기본 버튼은 [아니요] 이고, 무인 제거(`/SUPPRESSMSGBOXES`)에서는 **보존**이 선택된다.
+
+> **Inno 함정**: 평범한 `MsgBox` 는 `/SUPPRESSMSGBOXES` 를 무시하고 `IDYES` 를 반환한다.
+> 반드시 `SuppressibleMsgBox(..., IDNO)` 를 써야 무인 제거에서 데이터가 보존된다.
+> `tests/test_installer_policy.py` 가 이 규칙을 회귀 테스트로 강제한다.
+
+### ⚠️ 설치/제거 자동 테스트 규칙
+
+**Git Bash 로 Windows 스위치를 전달하지 않는다.** MSYS 경로 변환이
+`/VERYSILENT` 를 `C:/Program Files/Git/VERYSILENT` 로 바꿔버려 설치 프로그램이 **대화형으로**
+실행된다. 실제로 이 때문에 사용자 데이터와 fal API Key 가 삭제된 적이 있다.
+
+```powershell
+# OK - PowerShell
+Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait
+```
+```python
+# OK - Python subprocess (리스트 인자)
+subprocess.run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+```
+```bash
+# 금지 - Git Bash
+./UPCON_Setup_0.3.0.exe /VERYSILENT      # -> 경로로 변환되어 대화형 실행됨
+```
+
+테스트는 실제 사용자 데이터·자격 증명을 건드리지 않는다:
+`UPCON_DATA_DIR` 로 데이터 폴더를 격리하고, keyring 은 `UPCON-test`(pytest) /
+`UPCON-selftest`(packaging/selftest.py) 네임스페이스만 쓴다.
+실제 fal credential(서비스 이름 `UPCON`)은 **읽지도 삭제하지도 않는다.**
+
+### FFmpeg Corresponding Source (GPLv3 대응)
+
 동봉 FFmpeg 는 `--enable-gpl --enable-version3` 빌드라 **GPLv3** 가 적용된다.
 바이너리를 재배포하는 쪽(= UPCON)이 대응 소스를 제공할 의무를 진다 (GPLv3 §6).
 BtbN 저장소에는 준수 문구도 패키징된 소스도 없으므로 직접 모아 둔다.
