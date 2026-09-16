@@ -13,6 +13,15 @@
 #define MyAppPublisher "UPCON"
 #define MyAppDescription "AI Video Upscaler"
 
+#ifndef MyAppCopyright
+  #define MyAppCopyright "UPCON"
+#endif
+
+; 위저드 이미지 (scripts/make_installer_images.py 가 upcon.png 에서 생성).
+; 파일이 없으면 Inno 기본 이미지로 빌드된다.
+#define WizLarge "installer\wizard-large-164x314.bmp"
+#define HaveWizardImages FileExists(AddBackslash(SourcePath) + WizLarge)
+
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0-dev"
 #endif
@@ -30,6 +39,12 @@ AppVerName={#MyAppName} {#MyAppVersion}
 VersionInfoVersion=0.3.0
 AppPublisher={#MyAppPublisher}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
+AppCopyright={#MyAppCopyright}
+VersionInfoProductName={#MyAppName}
+VersionInfoProductTextVersion={#MyAppVersion}
+VersionInfoDescription={#MyAppName} Setup
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoCopyright={#MyAppCopyright}
 
 ; --- 권한 정책 ---
 ; per-user 설치. 관리자 권한(UAC)을 요구하지 않는다.
@@ -46,6 +61,15 @@ OutputBaseFilename=UPCON_Setup_{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; 브랜드가 보이도록 환영 화면을 켠다 (modern 스타일 기본값은 숨김).
+DisableWelcomePage=no
+DisableReadyPage=no
+ShowLanguageDialog=auto
+
+#if HaveWizardImages
+WizardImageFile=installer\wizard-large-164x314.bmp,installer\wizard-large-192x386.bmp,installer\wizard-large-246x471.bmp,installer\wizard-large-328x628.bmp
+WizardSmallImageFile=installer\wizard-small-55x55.bmp,installer\wizard-small-64x68.bmp,installer\wizard-small-83x80.bmp,installer\wizard-small-110x110.bmp
+#endif
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -64,6 +88,14 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+korean.WelcomeLabel1=%n%nUPCON 설치
+korean.WelcomeLabel2=AI 영상의 해상도를 쉽고 빠르게 향상시키는 UPCON 설치 프로그램입니다.
+korean.FinishedHeadingLabel=%n%nUPCON 설치 완료
+english.WelcomeLabel1=%n%nInstall UPCON
+english.WelcomeLabel2=Setup will install UPCON, a tool that upscales AI video to a higher resolution.
+english.FinishedHeadingLabel=%n%nUPCON installation complete
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

@@ -34,6 +34,10 @@ def find_iscc() -> Path:
 
 
 def main() -> int:
+    try:                    # 콘솔이 cp949 여도 (c) 기호 등으로 죽지 않게
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     from upcon.version import __version__
 
     dist = ROOT / "dist" / "UPCON"
@@ -53,7 +57,9 @@ def main() -> int:
     print(f"  설치 원본 : {dist}")
     print(f"  아이콘    : {icon if icon.is_file() else '(없음 - 기본 아이콘으로 빌드)'}")
 
-    cmd = [str(find_iscc()), f"/DMyAppVersion={__version__}", str(iss)]
+    from upcon.version import COPYRIGHT
+    cmd = [str(find_iscc()), f"/DMyAppVersion={__version__}",
+           f"/DMyAppCopyright={COPYRIGHT}", str(iss)]
     print("  ISCC      :", " ".join(cmd))
     r = subprocess.run(cmd, cwd=str(ROOT / "packaging"))
     if r.returncode != 0:

@@ -140,6 +140,20 @@ Real-ESRGAN 가중치 라이선스는 **unresolved** 상태다.
 * **AppId 고정** — `{B04C51EA-...}` 를 바꾸면 업그레이드가 아니라 별도 설치가 된다. 절대 변경 금지.
 * 사용자 데이터는 설치 폴더가 아니라 `%LOCALAPPDATA%\UPCON`, API Key 는 Windows 자격 증명 관리자.
 
+### 설치 프로그램 외형
+
+브랜드 요소는 확정된 `upcon/resources/upcon.png` 하나에서 파생한다. 새 로고를 만들지 않는다.
+
+```powershell
+.\.venv\Scripts\python scripts\make_installer_images.py   # 이미지를 다시 만들 때만
+```
+
+* `SetupIconFile` = `upcon/resources/upcon.ico` — Setup.exe · Uninstaller · 위저드 타이틀바
+* `WizardImageFile` / `WizardSmallImageFile` = `packaging/installer/wizard-*.bmp`
+  원본에서 심볼·워드마크·배경 그라데이션을 떼어내 배율별(100/125/150/200%)로 재배치한다.
+  비율을 바꾸거나 늘리지 않는다. 이미지가 없으면 Inno 기본 이미지로 정상 빌드된다.
+* 환영 화면(`DisableWelcomePage=no`)에 UPCON 브랜드와 한 줄 설명만 표시한다.
+
 ### 제거 정책
 
 | 대상 | 기본 동작 |
@@ -234,98 +248,6 @@ xvid 는 `svn.xvid.org` **rev 2204**, lame 은 `svn.code.sf.net` **rev 6761** �
 
 재실행 속도를 위해 `dist-ffmpeg-source/_cache/` 에 다운로드를 캐시한다 (지워도 무방).
 생성물은 `dist-*/` 라 git 에 포함되지 않는다.
-
-## Windows Installer (Inno Setup)
-
-```powershell
-# 1) Portable 빌드 먼저
-.\.venv\Scripts\python -m PyInstaller packaging\upcon.spec --noconfirm
-
-# 2) 설치 파일 생성 (버전은 upcon/version.py 에서 읽어 ISCC 에 주입)
-.\.venv\Scripts\python packaging\build_installer.py
-# -> dist-installer\UPCON_Setup_<version>.exe
-
-# 3) 안전장치 정적 검증 (설치는 하지 않는다)
-.\.venv\Scripts\python packaging\test_installer.py
-```
-
-`packaging/upcon.iss` 는 검증된 `dist\UPCON` 을 그대로 설치한다 (내부 구조 재조립 없음).
-
-* **per-user 설치** — `PrivilegesRequired=lowest`, 기본 경로 `%LOCALAPPDATA%\Programs\UPCON`.
-  관리자 권한(UAC)을 요구하지 않는다. UPCON 은 서비스·드라이버·시스템 통합이 없고
-  사용자 데이터도 `%LOCALAPPDATA%` 에 쓰므로 관리자 권한이 필요할 이유가 없다.
-* **AppId 고정** — `{B04C51EA-...}` 를 바꾸면 업그레이드가 아니라 별도 설치가 된다. 절대 변경 금지.
-* 사용자 데이터는 설치 폴더가 아니라 `%LOCALAPPDATA%\UPCON`, API Key 는 Windows 자격 증명 관리자.
-
-### 제거 정책
-
-| 대상 | 기본 동작 |
-|---|---|
-| 프로그램 파일 · 바로가기 · 레지스트리 항목 | 제거 |
-| `%LOCALAPPDATA%\UPCON` (설정 · 대기열 · 로그) | **보존** |
-| fal.ai API Key (자격 증명 관리자) | **보존** |
-| 업스케일 결과 영상 | **절대 삭제하지 않음** (원본 옆에 저장되므로 애초에 대상 아님) |
-
-대화형 제거에서 사용자가 **명시적으로 [예]** 를 선택했을 때만 사용자 데이터와 API Key 를 함께 지운다.
-기본 버튼은 [아니요] 이고, 무인 제거(`/SUPPRESSMSGBOXES`)에서는 **보존**이 선택된다.
-
-> **Inno 함정**: 평범한 `MsgBox` 는 `/SUPPRESSMSGBOXES` 를 무시하고 `IDYES` 를 반환한다.
-> 반드시 `SuppressibleMsgBox(..., IDNO)` 를 써야 무인 제거에서 데이터가 보존된다.
-> `tests/test_installer_policy.py` 가 이 규칙을 회귀 테스트로 강제한다.
-
-### ⚠️ 설치/제거 자동 테스트 규칙
-
-**Git Bash 로 Windows 스위치를 전달하지 않는다.** MSYS 경로 변환이
-`/VERYSILENT` 를 `C:/Program Files/Git/VERYSILENT` 로 바꿔버려 설치 프로그램이 **대화형으로**
-실행된다. 실제로 이 때문에 사용자 데이터와 fal API Key 가 삭제된 적이 있다.
-
-```powershell
-# OK - PowerShell
-Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait
-```
-```python
-# OK - Python subprocess (리스트 인자)
-subprocess.run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
-```
-```bash
-# 금지 - Git Bash
-./UPCON_Setup_0.3.0.exe /VERYSILENT      # -> 경로로 변환되어 대화형 실행됨
-```
-
-테스트는 실제 사용자 데이터·자격 증명을 건드리지 않는다:
-`UPCON_DATA_DIR` 로 데이터 폴더를 격리하고, keyring 은 `UPCON-test`(pytest) /
-`UPCON-selftest`(packaging/selftest.py) 네임스페이스만 쓴다.
-실제 fal credential(서비스 이름 `UPCON`)은 **읽지도 삭제하지도 않는다.**
-
-### FFmpeg Corresponding Source (GPLv3 대응)
-
-동봉 FFmpeg 는 `--enable-gpl --enable-version3` 빌드라 **GPLv3** 가 적용된다.
-바이너리를 재배포하는 쪽(= UPCON)이 대응 소스를 제공할 의무를 진다 (GPLv3 §6).
-BtbN 저장소에는 준수 문구도 패키징된 소스도 없으므로 직접 모아 둔다.
-
-```powershell
-.\.venv\Scripts\python scripts\build_ffmpeg_source_package.py
-# -> dist-ffmpeg-source\UPCON-FFmpeg-Corresponding-Source-<version>.zip
-```
-
-스크립트는 `bin\ffmpeg.exe` 의 실제 버전이 `scripts/fetch_binaries.py` 의 고정값과
-일치하는지 먼저 확인하고(불일치면 중단), 다음을 한 묶음으로 만든다.
-
-| 항목 | 내용 |
-|---|---|
-| FFmpeg 소스 | 정확한 upstream commit |
-| BtbN 빌드 스크립트 | 정확한 commit 스냅샷 — 127개 의존성의 고정 리비전이 여기 들어 있다 |
-| GPL 구성요소 소스 | x264, x265, vidstab, frei0r, rubberband, zvbi, xavs2 |
-| LICENSE / COPYING | 각 프로젝트 원문 |
-| `BUILD-INFO.txt` | 버전·commit·빌드태그·configure·툴체인·원본 zip SHA-256·동봉 파일 해시 |
-| `SOURCE-MANIFEST.txt` | component 별 upstream·리비전·라이선스·아카이브·SHA-256 + 127개 의존성 고정값 전체 |
-
-**xvid 는 자동 수집되지 않는다.** Subversion 저장소(rev 고정)라 git tarball 이 없다.
-`BUILD-INFO.txt` 에 정확한 SVN URL·리비전과 체크아웃 명령을 기록한다.
-downloads.xvid.com 의 릴리스 tarball 은 **다른 리비전이라 이 바이너리에 대응하지 않는다.**
-
-FFmpeg 버전을 올리면 `scripts/fetch_binaries.py` 의 고정값을 바꾼 뒤 이 스크립트를 다시 돌리면 된다.
-생성된 ZIP 은 `dist-*/` 라 git 에 포함되지 않는다.
 
 ## 의존성
 
