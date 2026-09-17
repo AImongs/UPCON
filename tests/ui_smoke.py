@@ -183,9 +183,22 @@ def main() -> int:
         assert jobs()[-3] is last
         ok("순서 변경(↑) OK")
         keep = {last.input_path, ten[0]}
-        win._remove_jobs([j for j in jobs() if j.input_path in set(ten) and j.input_path not in keep])
+        win.queue.table.clearSelection()
+        assert not win.queue.remove_btn.isEnabled()
+        win.queue.remove_btn.click()                # 선택 없음 → 아무것도 지우지 않는다 (C2)
+        assert len(jobs()) == 14, f"선택 없이 삭제됨: {len(jobs())}개"
+        sm = win.queue.table.selectionModel()
+        flags = sm.SelectionFlag.Select | sm.SelectionFlag.Rows
+        for r in range(win.queue.table.rowCount()):
+            j = win.queue._job_at(r)
+            if j.input_path in set(ten) and j.input_path not in keep:
+                sm.select(win.queue.table.model().index(r, 0), flags)
+        assert win.queue.remove_btn.isEnabled()
+        win.queue.remove_btn.click()
         assert len(jobs()) == 6, f"{len(jobs())}개"
-        ok("선택 삭제 OK (14 → 6)")
+        ok("선택 항목 삭제 OK: 선택 없음 → 삭제 없음, 선택한 8개만 삭제 (14 → 6)")
+        assert "같은 폴더" in win.options.output_hint.text() and "_2x" in win.options.output_hint.text()
+        ok("결과 저장 위치 안내 표시 (원본 폴더 · _2x)")
         real_get = credentials.get_fal_key
         credentials.get_fal_key = lambda: "12345678-abcd-4321-abcd-1234567890ab:fakefakefakefakefakefakefakefake"
         win.options.set_mode(ProcessMode.CLOUD)
@@ -242,6 +255,11 @@ def main() -> int:
         assert not win._batch_running and not win.controller.keep_awake.active
         assert JobStatus.PENDING in st, st
         ok(f"H 전체 중지 → 대기 {st.count(JobStatus.PENDING)}개 유지, 절전 방지 해제")
+        hint = win.progress.cur_sub.text()
+        assert win.start_btn.isEnabled() and "전체 업스케일 시작" in hint, hint
+        assert win.queue.retry_btn.isEnabled() and win.queue.retry_btn.text() in hint, (win.queue.retry_btn.text(), hint)
+        assert win.progress.all_bar.value() < 100
+        ok(f"중지 안내 = 실제 활성 버튼 ('{win.queue.retry_btn.text()}'), 진행률 {win.progress.all_bar.value()}%")
         qf = Path(DATA_DIR) / "queue.json"
         assert qf.exists() and "pending" in qf.read_text(encoding="utf-8")
         win.start_btn.click()
@@ -267,6 +285,16 @@ def main() -> int:
             assert abs(o.duration_sec - i.duration_sec) < 0.15 and o.has_audio == i.has_audio
             assert j.output_path.parent == j.input_path.parent
         ok("완료 파일 검증 OK (해상도 2×, FPS, 길이, 오디오 유무, 원본 옆 저장)")
+        last_done = win.last_output
+        assert win.progress.result_name.full_text() == last_done.name and str(last_done.parent) in win.progress.result_dir.full_text()
+        assert any(last_done.name in win.queue.table.item(r, 5).text() for r in range(win.queue.table.rowCount()))
+        assert "결과 파일" in win.progress.cur_sub.text()
+        ok(f"완료 후 결과 파일명/위치 표시: {last_done.name}")
+        win.add_files([make("late/clip99.mp4", ["-t", "1", "-c", "copy"])])
+        assert win.progress.cur_name.text() == "대기 중" and "시작" in win.progress.cur_sub.text(), win.progress.cur_name.text()
+        assert win.config.last_open_dir == str(WORK / "late") and win.queue.start_dir == str(WORK / "late")
+        ok("완료 후 새 영상 추가 → 진행 패널 '대기 중', 마지막 폴더 기억")
+        win._remove_jobs([j for j in jobs() if j.input_path.name == "clip99.mp4"])
         k5 = next(j for j in done if j.input_path.name == "clip05.mp4")
         assert k5.output_path.name == "clip05_2x_2.mp4" and (WORK / "many" / "clip05_2x.mp4").read_bytes() == b"old"
         ok("J 출력 파일명 충돌 → clip05_2x_2.mp4 (기존 결과 보존)")

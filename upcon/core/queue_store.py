@@ -63,7 +63,7 @@ def load_queue(path: Path | None = None) -> list[Job]:
                   error_message=d.get("error_message", "") if status == JobStatus.FAILED else "",
                   provider_id=d.get("provider_id", ""))
         if status == JobStatus.INTERRUPTED:
-            job.error_message = "이전 실행이 비정상 종료되어 중단되었습니다. '실패 항목 다시 시도' 로 다시 처리할 수 있습니다."
+            job.error_message = "이전 실행이 비정상 종료되어 중단되었습니다. '중단된 항목 다시 시작' 으로 다시 처리할 수 있습니다."
         jobs.append(job)
     if jobs:
         log.info("queue restored: %d items", len(jobs))

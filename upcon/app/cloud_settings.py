@@ -43,9 +43,11 @@ class CloudSettingsDialog(QDialog):
         title.setObjectName("dialogTitle")
         lay.addWidget(title)
         desc = QLabel(
-            "클라우드 GPU 업스케일은 <b>내 fal.ai 계정</b>으로 실행되며 비용도 내 계정에서 청구됩니다.<br>"
+            "내 PC 그래픽카드 대신 인터넷의 GPU(fal.ai)로 처리하는 <b>선택 기능</b>입니다. "
+            "내 PC로 처리할 수 있으면 연결하지 않아도 됩니다.<br>"
+            "클라우드 처리는 <b>내 fal.ai 계정</b>으로 실행되며 비용도 내 계정에서 청구됩니다.<br>"
             f"API Key는 <a href='{FAL_KEYS_URL}'>fal.ai 대시보드 → Keys</a> 에서 만들 수 있습니다. "
-            "입력한 키는 Windows 자격 증명 관리자에 안전하게 저장됩니다."
+            "입력한 키는 이 PC에 안전하게 저장됩니다."
         )
         desc.setOpenExternalLinks(True)
         desc.setWordWrap(True)
@@ -87,11 +89,12 @@ class CloudSettingsDialog(QDialog):
         if existing:
             self._set_status(True, "저장된 API Key가 있습니다. (연결 테스트로 확인 가능)")
         else:
-            self._set_status(None, f"저장소: Windows 자격 증명 관리자 ({credentials.backend_name()})")
+            self._set_status(None, "아직 연결된 계정이 없습니다.")
 
         self.price_label = QLabel(self._price_text())
         self.price_label.setProperty("class", "hint")
         self.price_label.setWordWrap(True)
+        self.price_label.setToolTip(self._price_tooltip)
         lay.addWidget(self.price_label)
 
         box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -108,13 +111,18 @@ class CloudSettingsDialog(QDialog):
         self.status.setText(f"<span style='color:{color};font-weight:600'>{icon}{text}</span>")
 
     def _price_text(self) -> str:
+        """기본 화면은 한 줄로: 요금이 어떻게 정해지는지. 계산식/조회 시각은 툴팁."""
         p = self.config.cloud_unit_prices.get(self.endpoint)
         if p:
-            return (f"현재 단가: ${p:g} / 메가픽셀 (fal API 조회, {self.config.cloud_price_checked_at[:16]})\n"
-                    "예상 비용 = 출력 가로 × 세로 × 프레임 수 ÷ 1,000,000 × 단가. 실제 청구액과 다를 수 있습니다.")
-        d = pricing.DOCUMENTED_UNIT_PRICES_USD_PER_MP[self.endpoint]
-        return (f"단가(공식 문서 {pricing.PRICE_DOC_DATE} 기준): ${d:g} / 메가픽셀. 연결 테스트 시 최신 단가를 조회합니다.\n"
-                "예상 비용 = 출력 가로 × 세로 × 프레임 수 ÷ 1,000,000 × 단가. 실제 청구액과 다를 수 있습니다.")
+            src = f"fal API 조회 {self.config.cloud_price_checked_at[:16]}"
+        else:
+            p = pricing.DOCUMENTED_UNIT_PRICES_USD_PER_MP[self.endpoint]
+            src = f"공식 문서 {pricing.PRICE_DOC_DATE} 기준"
+        self._price_tooltip = (f"단가 ${p:g} / 메가픽셀 ({src}).\n"
+                               "예상 비용 = 출력 가로 × 세로 × 프레임 수 ÷ 1,000,000 × 단가.\n"
+                               "연결 테스트 시 최신 단가를 조회합니다.")
+        return (f"요금은 영상 해상도와 길이에 따라 계산되며(단가 ${p:g} / 메가픽셀), 시작 전에 예상 비용을 보여 드립니다. "
+                "실제 청구액은 예상과 다를 수 있습니다.")
 
     # ---- 동작 ----
     def _test(self) -> None:
@@ -141,6 +149,7 @@ class CloudSettingsDialog(QDialog):
                 self.config.cloud_unit_prices[self.endpoint] = res.unit_price_usd
                 self.config.cloud_price_checked_at = datetime.now(timezone.utc).isoformat(timespec="minutes")
                 self.price_label.setText(self._price_text())
+                self.price_label.setToolTip(self._price_tooltip)
         else:
             self._tested_ok_key = None
             self._set_status(False, res.message)

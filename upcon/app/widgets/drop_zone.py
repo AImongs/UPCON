@@ -6,8 +6,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
-from PySide6.QtWidgets import QFileDialog, QFrame, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout
 
+from upcon.app.file_dialogs import pick_videos
 from upcon.core.constants import SUPPORTED_EXTENSIONS
 
 
@@ -27,6 +28,7 @@ class DropZone(QFrame):
         self.setMinimumHeight(170)
         self.setProperty("hover", False)
         self.setProperty("loaded", False)
+        self.start_dir = ""          # 파일 대화상자 시작 폴더 (QueuePanel.set_start_dir 가 넣어 준다)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 16, 24, 16)
@@ -57,12 +59,9 @@ class DropZone(QFrame):
 
     # ---- 파일 선택 ----
     def open_dialog(self) -> None:
-        exts = " ".join(f"*{e}" for e in SUPPORTED_EXTENSIONS)
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "영상 파일 선택", "", f"영상 파일 ({exts});;모든 파일 (*.*)"
-        )
+        files = pick_videos(self, "영상 파일 선택", self.start_dir)
         if files:
-            self.filesSelected.emit([Path(f) for f in files])
+            self.filesSelected.emit(files)
 
     def set_loaded(self, loaded: bool) -> None:
         self.setProperty("loaded", loaded)

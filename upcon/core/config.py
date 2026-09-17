@@ -39,6 +39,8 @@ class AppConfig:
     process_mode: str = ProcessMode.AUTO.value
     scale: int = DEFAULT_SCALE
     output_dir: str = ""                         # 비어 있으면 원본 옆에 저장
+    # '영상 추가' 대화상자가 시작할 폴더 = 마지막으로 영상을 추가한 폴더. 비어 있거나 없으면 동영상 폴더.
+    last_open_dir: str = ""
     # 대용량 모델(SeedVR2 등) 다운로드 위치. 사용자가 직접 선택. 비어 있으면 미설치 상태.
     engine_dir: str = ""
     cloud_provider: str = "fal"                      # credential 자체는 keyring 에만 저장

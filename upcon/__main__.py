@@ -11,9 +11,10 @@ from PySide6.QtWidgets import QApplication
 
 from upcon import APP_NAME, APP_VERSION
 from upcon.app.main_window import MainWindow
+from upcon.app.single_instance import SingleInstance
 from upcon.core.config import AppConfig
 from upcon.core.logging_setup import setup_logging
-from upcon.core.paths import app_icon_file, resources_dir
+from upcon.core.paths import app_icon_file, resources_dir, user_data_dir
 
 
 def _load_stylesheet() -> str:
@@ -43,9 +44,18 @@ def create_app(argv: list[str] | None = None) -> tuple[QApplication, MainWindow]
 
 
 def main() -> int:
+    app = QApplication.instance() or QApplication(sys.argv)
+    # 같은 데이터 폴더를 쓰는 UPCON 이 이미 떠 있으면 그 창을 앞으로 보내고 조용히 끝낸다 (queue.json 동시 접근 방지).
+    guard = SingleInstance(user_data_dir())
+    if guard.already_running:
+        return 0
     app, window = create_app()
+    guard.activated.connect(window.bring_to_front)
     window.show()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        guard.close()
 
 
 if __name__ == "__main__":

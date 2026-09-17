@@ -83,7 +83,8 @@ def test_sequential_and_failure_continues(tmp_path):
     assert st == [JobStatus.DONE, JobStatus.DONE, JobStatus.FAILED, JobStatus.DONE, JobStatus.DONE]
     assert jobs[2].error_message == "깨진 파일"
     s = m.summary()
-    assert (s.total, s.done, s.failed, s.pending) == (5, 4, 1, 0) and s.percent == 100
+    assert (s.total, s.done, s.failed, s.pending) == (5, 4, 1, 0)
+    assert s.percent == 80, "진행률은 완료한 작업량 기준 — 실패 항목은 100% 에 포함되지 않는다 (UX 1차)"
     assert awake.calls == ["acquire", "release"]                        # 절전 방지 켜짐 → 끝나면 해제
     assert not m.running
 

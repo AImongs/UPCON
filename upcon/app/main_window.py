@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from upcon import APP_NAME, APP_TAGLINE, APP_VERSION
+from upcon.app import file_dialogs
 from upcon.app.about_dialog import AboutDialog
 from upcon.app.cloud_settings import CloudSettingsDialog
 from upcon.app.controller import Controller
@@ -21,8 +22,9 @@ from upcon.app.widgets.options_panel import OptionsPanel
 from upcon.app.widgets.progress_panel import ProgressPanel
 from upcon.app.widgets.queue_panel import QueuePanel
 from upcon.core.config import AppConfig
-from upcon.core.constants import ProcessMode
+from upcon.core.constants import OUTPUT_SUFFIX_TEMPLATE, ProcessMode
 from upcon.core.env import SystemEnv
+from upcon.core.eta import EtaEstimator, format_eta
 from upcon.core.jobs import Job, JobStatus, Phase
 from upcon.core.pricing import format_krw, format_usd
 from upcon.core.router import Decision
@@ -48,6 +50,8 @@ class MainWindow(QMainWindow):
         self.last_output: Path | None = None
         self.env_message = "PC 환경 확인 중..."
         self._batch_running = False
+        self._eta = EtaEstimator()
+        self._eta_job_id = ""
 
         self.setWindowTitle(f"{APP_NAME} — AI Video Upscaler")
         self.resize(1000, 880)
@@ -59,7 +63,7 @@ class MainWindow(QMainWindow):
         n = self.controller.restore_queue()
         self._refresh_table()
         if n:
-            self.progress.set_idle("이전 대기열을 복원했습니다", f"{n}개 항목 (대기/실패/중단됨)")
+            self.progress.set_idle("이전 대기열을 복원했습니다", f"{n}개 항목 (대기/실패/취소/중단됨)")
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -92,7 +96,8 @@ class MainWindow(QMainWindow):
         header.addStretch(1)
         self.settings_btn = QToolButton()
         self.settings_btn.setObjectName("settingsButton")
-        self.settings_btn.setText("⚙  설정")
+        self.settings_btn.setText("⚙  클라우드 설정")          # 저장 위치 설정이 아니라 fal.ai 계정 연결 화면이다
+        self.settings_btn.setToolTip("클라우드 GPU(fal.ai) 계정 연결")
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.clicked.connect(self._open_settings)
         header.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -135,6 +140,7 @@ class MainWindow(QMainWindow):
         self.stop_btn.setVisible(False)
         self.stop_btn.clicked.connect(self._on_stop_all)
         self.open_btn = QPushButton("결과 폴더 열기")
+        self.open_btn.setToolTip("마지막(또는 선택한) 결과 영상이 있는 폴더를 엽니다.")
         self.open_btn.setVisible(False)
         self.open_btn.clicked.connect(self._open_result_folder)
         btn_row.addWidget(self.start_btn, 1)
@@ -158,6 +164,27 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.options.set_mode(ProcessMode.AUTO)
         self.options.set_scale(self.config.scale)
+        self.queue.set_start_dir(self.config.last_open_dir)
+        self._refresh_output_hint()
+
+    def output_hint_text(self) -> str:
+        """결과 저장 규칙을 초보자 문장으로. 예: 원본 옆 / 파일명 뒤 _2x."""
+        suffix = OUTPUT_SUFFIX_TEMPLATE.format(scale=self.options.scale())
+        if self.config.output_dir:
+            return f"결과 영상은 {self.config.output_dir} 폴더에 파일명 뒤에 {suffix}가 붙어 저장됩니다."
+        return (f"결과 영상은 원본 영상과 같은 폴더에 파일명 뒤에 {suffix}가 붙어 저장됩니다. "
+                f"(예: 영상.mp4 → 영상{suffix}.mp4)")
+
+    def _refresh_output_hint(self) -> None:
+        self.options.set_output_hint(self.output_hint_text())
+
+    def bring_to_front(self) -> None:
+        """다른 UPCON 프로세스가 실행을 시도했을 때 (single_instance) 이 창을 앞으로."""
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _set_status_bar(self) -> None:
         self.statusBar().showMessage(f"{APP_NAME} v{APP_VERSION}  ·  {self.env_message}")
@@ -177,11 +204,21 @@ class MainWindow(QMainWindow):
 
     # -------------------------------------------------------------- 대기열
     def add_files(self, paths: list[Path]) -> None:
-        added, skipped = self.controller.add_files([Path(p) for p in paths], self.options.scale())
+        paths = [Path(p) for p in paths]
+        added, skipped = self.controller.add_files(paths, self.options.scale())
         log.info("queue add: %d added, %d skipped", added, skipped)
+        if added:
+            d = file_dialogs.remember_dir(paths)
+            if d and d != self.config.last_open_dir:
+                self.config.last_open_dir = d
+                self.config.save()
+                self.queue.set_start_dir(d)
         self._refresh_table()
         if skipped and not added:
             self.progress.set_idle("추가된 파일이 없습니다", "이미 대기열에 있거나 지원하지 않는 파일입니다.")
+        elif added and not self._batch_running:
+            # 이전 배치의 '전체 작업 완료' 문구가 새 항목 상태처럼 보이지 않도록 대기 상태로
+            self.progress.set_waiting(self.controller.summary().pending)
 
     def _refresh_table(self) -> None:
         self.queue.set_jobs(list(self.controller.jobs.jobs))
@@ -197,17 +234,34 @@ class MainWindow(QMainWindow):
         self.open_btn.setVisible(s.done > 0)
 
     def _remove_jobs(self, jobs: list[Job]) -> None:
-        self.controller.remove_jobs(jobs)
+        n = self.controller.remove_jobs(jobs)
         self._refresh_table()
+        if n and not self._batch_running:
+            done = sum(1 for j in jobs if j.status == JobStatus.DONE)
+            sub = "결과 영상 파일은 삭제되지 않았습니다." if done else ""
+            self.progress.set_idle(f"{n}개 항목을 목록에서 삭제했습니다", sub)
 
     def _clear_jobs(self) -> None:
         if self._batch_running:
             return
-        if self.controller.jobs.jobs and QMessageBox.question(
-                self, "전체 삭제", "대기열의 모든 항목을 삭제할까요? (결과 파일은 삭제되지 않습니다)") != QMessageBox.StandardButton.Yes:
+        if self.controller.jobs.jobs and not self._confirm(
+                "전체 삭제", "목록의 모든 항목을 삭제할까요?\n결과 영상 파일은 삭제되지 않습니다.", "전체 삭제", "취소"):
             return
         self.controller.clear_jobs()
         self._refresh_table()
+        self.progress.set_idle("목록을 비웠습니다", "결과 영상 파일은 삭제되지 않았습니다.")
+
+    def _confirm(self, title: str, text: str, ok_label: str, cancel_label: str) -> bool:
+        """Yes/No 대신 한글 버튼이 있는 확인창. Esc/닫기는 취소."""
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(text)
+        ok = box.addButton(ok_label, QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton(cancel_label, QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is ok
 
     def _move_job(self, job: Job, delta: int) -> None:
         if self.controller.move_job(job, delta):
@@ -217,7 +271,7 @@ class MainWindow(QMainWindow):
         n = self.controller.retry_failed()
         self._refresh_table()
         if n:
-            self.progress.set_idle(f"{n}개 항목을 다시 대기열에 넣었습니다", "전체 업스케일 시작을 누르세요.")
+            self.progress.set_idle(f"{n}개 항목을 다시 대기열에 넣었습니다", self.progress.IDLE_SUB)
 
     # ------------------------------------------------------------ 옵션/비용
     def _on_mode_changed(self, mode: ProcessMode) -> None:
@@ -232,6 +286,7 @@ class MainWindow(QMainWindow):
             if j.status == JobStatus.PENDING:
                 j.scale = scale
         self._refresh_table()
+        self._refresh_output_hint()
 
     def _cloud_would_be_used(self) -> bool:
         mode = self.options.mode()
@@ -283,7 +338,7 @@ class MainWindow(QMainWindow):
         scale = self.options.scale()
         decision = self.controller.decide(self.options.mode(), scale)
         if decision.provider is None:
-            QMessageBox.warning(self, "업스케일을 시작할 수 없습니다", decision.message)
+            self._warn("업스케일을 시작할 수 없습니다", decision.message)
             return
         if decision.provider.kind == "cloud":
             total, n = self.controller.total_cloud_cost(scale)
@@ -292,6 +347,7 @@ class MainWindow(QMainWindow):
         n = self.controller.start_all(decision.provider, decision.message, scale)
         log.info("batch start: %d files via %s", n, decision.provider.id)
         self._set_running_ui(True)
+        self._eta.reset()
         self.progress.set_current("", "시작 중...", None, decision.message)
 
     def _confirm_cloud(self, n: int, total: float, why: str) -> bool:
@@ -339,32 +395,59 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         if event == "finished":
             msg = f"{s.done}개 완료" + (f" / {s.failed}개 실패" if s.failed else "") + (f" / {s.cancelled}개 취소" if s.cancelled else "")
-            self.progress.set_idle("전체 작업 완료", msg)
+            sub = msg + ("  ·  결과 영상은 아래 '결과 파일' 위치에 저장되었습니다." if s.done else "")
+            self.progress.set_idle("전체 작업 완료", sub, 100 if s.done else 0)
             if s.failed:
-                QMessageBox.warning(self, "전체 작업 완료",
-                                    f"{msg}\n실패한 항목은 목록에서 오류 내용을 확인하고 '실패 항목 다시 시도'를 누를 수 있습니다.")
+                self._warn("전체 작업 완료",
+                           f"{msg}\n실패한 항목은 목록에서 오류 내용을 확인하고 '{self.queue.retry_btn.text()}' 버튼으로 다시 처리할 수 있습니다.")
         elif event == "stopped":
-            self.progress.set_idle("전체 중지됨", f"대기 {s.pending}개가 남아 있습니다. '전체 업스케일 시작'으로 이어서 처리할 수 있습니다.")
+            self.progress.set_idle("전체 중지됨", self.stopped_hint(s))
+
+    def stopped_hint(self, s) -> str:
+        """중지 후 안내는 '지금 실제로 누를 수 있는 버튼' 만 말한다."""
+        parts = []
+        if s.pending:
+            parts.append(f"대기 {s.pending}개가 남아 있습니다. '전체 업스케일 시작'으로 이어서 처리할 수 있습니다.")
+        if s.cancelled or s.interrupted or s.failed:
+            parts.append(f"중지된 항목은 '{self.queue.retry_btn.text()}' 버튼으로 다시 처리할 수 있습니다.")
+        return "  ".join(parts) if parts else "처리할 항목이 없습니다."
+
+    def _warn(self, title: str, text: str) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(text)
+        box.addButton("확인", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+
+    def _running_sub(self, job: Job) -> str:
+        """처리 중 문구: 프레임 숫자 대신 진행률 · 남은 시간(근사) · 경과."""
+        p = job.progress
+        elapsed = f"경과 {_fmt_sec(job.elapsed_sec)}"
+        if p.phase == Phase.UPSCALE and p.percent is not None:
+            if job.id != self._eta_job_id:
+                self._eta_job_id = job.id
+                self._eta.reset()
+            eta = self._eta.update(p.frames_done, p.frames_total)
+            return f"진행률 {p.percent}%  ·  남은 시간 {format_eta(eta)}  ·  {elapsed}"
+        if p.phase in (Phase.UPLOAD, Phase.DOWNLOAD, Phase.QUEUE, Phase.CLOUD):
+            return f"{p.detail}  ·  {elapsed}" if p.detail else elapsed
+        return p.detail or job.provider_label
 
     def _on_job_updated(self, job: Job) -> None:
         self.queue.update_job(job)
         if job.status == JobStatus.RUNNING:
             p = job.progress
-            sub = p.detail
-            if p.phase == Phase.UPSCALE and p.percent is not None:
-                sub = f"{p.detail}  ·  경과 {_fmt_sec(job.elapsed_sec)}"
-            elif p.phase in (Phase.UPLOAD, Phase.DOWNLOAD, Phase.QUEUE, Phase.CLOUD):
-                sub = f"{p.detail}  ·  경과 {_fmt_sec(job.elapsed_sec)}"
-            elif not sub:
-                sub = job.provider_label
-            self.progress.set_current(job.input_path.name, p.phase.value, p.percent, sub)
+            self.progress.set_current(job.input_path.name, p.phase.value, p.percent, self._running_sub(job))
         elif job.status == JobStatus.DONE and job.output_path:
             self.last_output = job.output_path
+            self.progress.set_result(job.output_path)
             self.progress.set_current(job.input_path.name, "완료", 100,
                                       f"{job.output_path.name}  ·  {_fmt_sec(job.elapsed_sec)}" + (f"  ·  {job.note}" if job.note else ""))
         elif job.status == JobStatus.FAILED and job.finished_at:
             self.progress.set_current(job.input_path.name, "실패", 0, job.error_message)
-        elif job.status == JobStatus.CANCELLED:
+        elif job.status == JobStatus.CANCELLED and self._batch_running:
+            # 배치가 돌고 있을 때만. (재시작 시 복원된 '취소됨' 항목이 '다음 파일로 넘어갑니다' 로 보이면 안 된다)
             self.progress.set_current(job.input_path.name, "취소됨", 0, job.note or "다음 파일로 넘어갑니다.")
         self._refresh_summary()
 
@@ -388,6 +471,7 @@ class MainWindow(QMainWindow):
         dlg = CloudSettingsDialog(self.config, self.controller.cloud_endpoint(), self)
         dlg.exec()
         self.config.save()
+        self._refresh_output_hint()
         self.controller.detect_env_async()
 
     def closeEvent(self, event: QCloseEvent) -> None:

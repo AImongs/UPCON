@@ -187,7 +187,10 @@ class BatchSummary:
 
     @property
     def percent(self) -> int:
-        """전체 진행률: 총 프레임 기준 (프레임 수를 모르는 항목은 파일 수 기준으로 보정)."""
+        """전체 진행률 = 완료한 작업량 / 전체 작업량 (총 프레임 기준, 프레임 수를 모르면 파일 수 기준).
+
+        실패/취소/중단 항목은 '끝난 것' 이지만 진행으로 세지 않는다 — 완료 0개인데 100% 로 보이면 안 된다.
+        """
         if self.frames_total > 0:
             return int(min(100, self.frames_done * 100 / self.frames_total))
         if self.total:
@@ -328,14 +331,11 @@ class JobManager:
                 elif j.status == JobStatus.PENDING:
                     s.pending += 1
                 elif j.status == JobStatus.FAILED:
-                    s.failed += 1
-                    s.frames_done += f          # 끝난 항목으로 취급 (남은 작업량 기준)
+                    s.failed += 1               # 진행률에 넣지 않는다 (percent 참고)
                 elif j.status == JobStatus.CANCELLED:
                     s.cancelled += 1
-                    s.frames_done += f
                 elif j.status == JobStatus.INTERRUPTED:
                     s.interrupted += 1
-                    s.frames_done += f
         return s
 
     # ------------------------------------------------------------ 워커

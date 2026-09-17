@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QRadioButton, QVBoxLayout, QWidget,
 )
@@ -65,6 +65,13 @@ class OptionsPanel(QFrame):
         self.env_hint.setWordWrap(True)
         outer.addWidget(self.env_hint)
 
+        # 결과가 어디에 어떤 이름으로 저장되는지 — 처리 전에 미리 알려 준다 (MainWindow 가 설정에 맞춰 채운다)
+        self.output_hint = QLabel("")
+        self.output_hint.setProperty("class", "hint")
+        self.output_hint.setWordWrap(True)
+        self.output_hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        outer.addWidget(self.output_hint)
+
         self.mode_group.buttonToggled.connect(self._on_mode_toggled)
         self.scale_group.buttonToggled.connect(self._on_scale_toggled)
 
@@ -90,6 +97,10 @@ class OptionsPanel(QFrame):
 
     def set_env_hint(self, text: str) -> None:
         self.env_hint.setText(text.splitlines()[0] if text else "")
+
+    def set_output_hint(self, text: str, tooltip: str = "") -> None:
+        self.output_hint.setText(text)
+        self.output_hint.setToolTip(tooltip or text)
 
     def _on_mode_toggled(self, button, checked: bool) -> None:
         if checked:
