@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from upcon import APP_NAME
+from upcon import platform as _plat
 
 
 def project_root() -> Path:
@@ -43,14 +44,17 @@ def app_icon_file() -> Path | None:
 
 
 def user_data_dir() -> Path:
-    """설정·로그 저장 위치: %LOCALAPPDATA%\\UPCON (테스트는 UPCON_DATA_DIR 환경변수로 격리)"""
+    """설정·로그 저장 위치.
+
+    Windows: %LOCALAPPDATA%\\UPCON (기존 그대로, 변경 없음).
+    macOS:   ~/Library/Application Support/UPCON (STEP MAC-1).
+    테스트는 두 플랫폼 모두 UPCON_DATA_DIR 환경변수로 격리한다."""
     override = os.environ.get("UPCON_DATA_DIR")
     if override:
         d = Path(override)
         d.mkdir(parents=True, exist_ok=True)
         return d
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    d = Path(base) / APP_NAME
+    d = _plat.user_data_root() / APP_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 

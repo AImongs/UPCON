@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 
 from upcon.core.config import AppConfig
-from upcon.core.constants import ProcessMode
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode, ProcessMode
 from upcon.core.env import SystemEnv
 from upcon.providers.base import UpscalerProvider
 
@@ -39,11 +39,12 @@ class Router:
         rank = {pid: i for i, pid in enumerate(prio)}
         return sorted(self.local, key=lambda p: rank.get(p.id, len(rank)))
 
-    def decide(self, mode: ProcessMode, env: SystemEnv, scale: int) -> Decision:
+    def decide(self, mode: ProcessMode, env: SystemEnv, scale: int,
+              output_mode: OutputMode = DEFAULT_OUTPUT_MODE) -> Decision:
         local_reasons: list[str] = []
         if mode in (ProcessMode.AUTO, ProcessMode.LOCAL):
             for p in self._order_local():
-                a = p.check_availability(env, scale) if hasattr(p, "check_availability") else None
+                a = p.check_availability(env, scale, output_mode) if hasattr(p, "check_availability") else None
                 if a and a.ok:
                     msg = a.reason.replace("에서 처리합니다.", "로 무료 처리합니다.") if mode == ProcessMode.AUTO else a.reason
                     return Decision(p, msg, a.detail)
@@ -62,7 +63,7 @@ class Router:
                 return Decision(None, f"{why}\n(설정에서 클라우드 자동 전환이 꺼져 있습니다)", "cloud fallback disabled")
             cloud_reasons: list[str] = []
             for p in self.cloud:
-                a = p.check_availability(env, scale)
+                a = p.check_availability(env, scale, output_mode)
                 if a.ok:
                     if mode == ProcessMode.CLOUD:
                         msg = a.reason

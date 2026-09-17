@@ -72,6 +72,16 @@ def sample_480p(ffmpeg_bin, samples_dir) -> Path:
 
 
 @pytest.fixture(scope="session")
+def sample_480p_portrait(ffmpeg_bin, samples_dir) -> Path:
+    """480×854 / 24fps / 3초 / AAC 오디오 있음 — 세로 영상(9:16 근사) 출력 해상도 테스트용 (STEP 10)."""
+    return _make(ffmpeg_bin, samples_dir / "sample_480p_portrait.mp4", [
+        "-f", "lavfi", "-i", "testsrc2=size=480x854:rate=24",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+        "-t", "3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+    ])
+
+
+@pytest.fixture(scope="session")
 def sample_1080p_korean(ffmpeg_bin, samples_dir) -> Path:
     """1920×1080 / 29.97fps / 3초 / 무음. 한글 파일명·경로 처리 검증용."""
     d = samples_dir / "한글 폴더"

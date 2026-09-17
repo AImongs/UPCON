@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Signal
 
 from upcon.core import queue_store
 from upcon.core.config import AppConfig
-from upcon.core.constants import SUPPORTED_EXTENSIONS, ProcessMode
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, SUPPORTED_EXTENSIONS, OutputMode, ProcessMode, parse_output_mode
 from upcon.core.env import SystemEnv, detect_system_env
 from upcon.core.errors import UpconError
 from upcon.core.jobs import BatchSummary, Job, JobManager, JobStatus, ProgressCallback
@@ -60,7 +60,8 @@ class Controller(QObject):
         def work():
             try:
                 env = detect_system_env()
-                decision = self.router.decide(ProcessMode.AUTO, env, self.config.scale)
+                decision = self.router.decide(ProcessMode.AUTO, env, self.config.scale,
+                                              parse_output_mode(self.config.output_mode))
             except Exception as e:  # 감지 실패해도 앱은 떠야 함
                 log.exception("env detect failed: %s", e)
                 env, decision = SystemEnv(), Decision(None, "PC 환경을 확인하지 못했습니다.", str(e))
@@ -69,10 +70,10 @@ class Controller(QObject):
         threading.Thread(target=work, name="upcon-env", daemon=True).start()
 
     # ---- 라우팅/비용 ----
-    def decide(self, mode: ProcessMode, scale: int) -> Decision:
+    def decide(self, mode: ProcessMode, scale: int, output_mode: OutputMode = DEFAULT_OUTPUT_MODE) -> Decision:
         env = self.env or detect_system_env()
         self.env = env
-        return self.router.decide(mode, env, scale)
+        return self.router.decide(mode, env, scale, output_mode)
 
     def cloud_cost(self, info: VideoInfo, scale: int) -> CostEstimate:
         return self.fal_flashvsr.cost(info, scale)
@@ -91,15 +92,17 @@ class Controller(QObject):
         return total, n
 
     # ---- 대기열 ----
-    def add_files(self, paths: list[Path], scale: int) -> tuple[int, int]:
-        """파일 추가 + 백그라운드 분석. (추가됨, 중복/무시됨) 반환."""
+    def add_files(self, paths: list[Path], output_mode: OutputMode) -> tuple[int, int]:
+        """파일 추가 + 백그라운드 분석. (추가됨, 중복/무시됨) 반환.
+
+        scale(AI/클라우드 실제 배율)은 항상 기본값 — 사용자가 고르는 건 output_mode(2×/1080p/4K)."""
         added = skipped = 0
         for p in paths:
             p = Path(p)
             if not p.is_file() or p.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 skipped += 1
                 continue
-            job = Job(input_path=p, scale=scale)
+            job = Job(input_path=p, scale=self.config.scale, output_mode=output_mode)
             if not self.jobs.add(job):
                 skipped += 1
                 continue
@@ -172,12 +175,13 @@ class Controller(QObject):
         return n
 
     # ---- 실행 ----
-    def start_all(self, provider: UpscalerProvider, label: str, scale: int) -> int:
-        """대기 항목 전부에 provider 지정 후 순차 처리 시작. 대상 개수 반환."""
+    def start_all(self, provider: UpscalerProvider, label: str, scale: int,
+                  output_mode: OutputMode = DEFAULT_OUTPUT_MODE) -> int:
+        """대기 항목 전부에 provider/출력 방식을 지정 후 순차 처리 시작. 대상 개수 반환."""
         n = 0
         for j in self.jobs.jobs:
             if j.status == JobStatus.PENDING:
-                j.provider_id, j.provider_label, j.scale = provider.id, label, scale
+                j.provider_id, j.provider_label, j.scale, j.output_mode = provider.id, label, scale, output_mode
                 n += 1
         self.jobs.start()
         return n

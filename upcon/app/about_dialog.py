@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -16,22 +15,38 @@ from PySide6.QtWidgets import (
 )
 
 from upcon import APP_DESCRIPTION, APP_NAME, APP_VERSION, COPYRIGHT
+from upcon import platform as plat
 from upcon.core.paths import notices_file
 
 log = logging.getLogger(__name__)
 
 # 사용자에게 보여줄 핵심 고지. 전문은 THIRD_PARTY_NOTICES.md.
 # 주의: 아직 확정되지 않은 Corresponding Source URL 을 여기에 적지 않는다.
-THIRD_PARTY_SUMMARY = (
-    "UPCON 은 아래 제3자 소프트웨어를 포함합니다. 각 구성요소는 별도의 제3자 소프트웨어이며, "
-    "저작권·라이선스 전문은 아래 '제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
-    "• FFmpeg — UPCON 에 동봉된 FFmpeg 빌드는 GPLv3 라이선스로 배포됩니다. "
-    "FFmpeg 는 UPCON 과 별개의 제3자 구성요소이며, 별도 실행 파일로 포함되어 있습니다.\n"
-    "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan — 업스케일 AI 모델 및 실행기 (BSD-3-Clause / MIT)\n"
-    "• ncnn — 신경망 추론 라이브러리 (BSD-3-Clause, Tencent)\n"
-    "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"
-    "• 그 밖의 오픈소스 구성요소 — 전문 참조"
-)
+# STEP MAC-1: macOS 빌드에는 FFmpeg 실행파일도 Real-ESRGAN weight 도 동봉하지 않으므로
+# (Windows 배포 정책은 그대로, 동봉 여부만 실제와 다르게 말하면 안 된다) 문구를 나눈다.
+if plat.IS_MACOS:
+    THIRD_PARTY_SUMMARY = (
+        "이 macOS 빌드에는 FFmpeg 실행파일과 Real-ESRGAN(ncnn) 모델·실행기가 동봉되어 있지 않습니다. "
+        "각 구성요소는 별도의 제3자 소프트웨어이며, 저작권·라이선스 전문은 아래 "
+        "'제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
+        "• FFmpeg — 이 macOS 빌드는 동봉하지 않고 시스템에 설치된 FFmpeg(예: Homebrew)를 사용합니다. "
+        "FFmpeg 는 UPCON 과 별개의 제3자 소프트웨어이며 빌드 구성에 따라 GPLv3 등의 라이선스를 따릅니다.\n"
+        "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan(ncnn 기반) — 이 macOS 빌드에는 아직 포함되어 있지 않습니다. "
+        "내 PC GPU 업스케일 대신 클라우드 업스케일(fal.ai)만 지원합니다.\n"
+        "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"
+        "• 그 밖의 오픈소스 구성요소 — 전문 참조"
+    )
+else:
+    THIRD_PARTY_SUMMARY = (
+        "UPCON 은 아래 제3자 소프트웨어를 포함합니다. 각 구성요소는 별도의 제3자 소프트웨어이며, "
+        "저작권·라이선스 전문은 아래 '제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
+        "• FFmpeg — UPCON 에 동봉된 FFmpeg 빌드는 GPLv3 라이선스로 배포됩니다. "
+        "FFmpeg 는 UPCON 과 별개의 제3자 구성요소이며, 별도 실행 파일로 포함되어 있습니다.\n"
+        "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan — 업스케일 AI 모델 및 실행기 (BSD-3-Clause / MIT)\n"
+        "• ncnn — 신경망 추론 라이브러리 (BSD-3-Clause, Tencent)\n"
+        "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"
+        "• 그 밖의 오픈소스 구성요소 — 전문 참조"
+    )
 
 
 class NoticesDialog(QDialog):
@@ -77,7 +92,7 @@ class NoticesDialog(QDialog):
 
     def _open_location(self) -> None:
         if self._path.is_file():
-            subprocess.Popen(["explorer", "/select,", str(self._path)])
+            plat.reveal_in_file_manager(self._path)
 
 
 class AboutDialog(QDialog):

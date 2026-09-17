@@ -3,11 +3,19 @@
 파이프라인 (청크 단위, 임시 디스크 사용량 상한 관리):
 
     원본 ─ffmpeg(rawvideo bgr24 파이프)─▶ 청크 BMP ─▶ ncnn-vulkan 2× ─▶ 청크 PNG
-        ─▶ (피더 스레드) ffmpeg 인코더 stdin ─▶ H.264 MP4 + 원본 오디오 ─▶ 파일명_2x.mp4
+        ─▶ (피더 스레드) ffmpeg 인코더 stdin ─▶ (필요하면 최종 리사이즈) ─▶ H.264 MP4 + 원본 오디오
 
 - 원본은 읽기만 한다.
 - 진행률은 ncnn 이 실제로 완료한 프레임 수 / 전체 프레임 수.
 - 취소 시 모든 자식 프로세스를 종료하고 임시 폴더와 미완성 결과 파일을 지운다.
+
+STEP 10 — 출력 해상도(2×/1080p/4K):
+Real-ESRGAN 자체는 여전히 2× 만 실행한다(scale=job.scale, 항상 2 — 검증된 유일한 값).
+1080p/4K 는 이 2× 결과를 FFmpeg 인코더 단계에서 목표 크기로 리사이즈해 맞춘다
+(upcon.core.resolution.target_size). AI 를 두 번 돌리지 않는다.
+원본이 이미 목표 해상도 이상이면(예: 4K 원본 + 1080p 선택) resolution.needs_ai_upscale() 이
+False 를 돌려주고, AI/ncnn 없이 FFmpeg 만으로 리사이즈한다(_run_plain_resize) — 이미 GPU 가용성은
+Router 가 이 Provider 를 고른 시점에 확인됐으므로, 여기서는 그냥 '이번 작업엔 필요 없어서 안 쓴다'.
 """
 
 from __future__ import annotations
@@ -21,10 +29,13 @@ import threading
 import time
 from pathlib import Path
 
+from upcon import platform as plat
 from upcon.core import ffmpeg as ff
+from upcon.core import resolution
 from upcon.core import tempfs
 from upcon.core.binaries import find_binary
 from upcon.core.config import AppConfig
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode
 from upcon.core.env import GpuInfo, SystemEnv
 from upcon.core.errors import BinaryNotFoundError, UpconError
 from upcon.core.jobs import CancelToken, CancelledError, Job, Phase, Progress, ProgressCallback
@@ -76,7 +87,17 @@ class LocalNcnnProvider(UpscalerProvider):
         return base.with_suffix(".param").exists() and base.with_suffix(".bin").exists()
 
     # ------------------------------------------------------------------ 가용성
-    def check_availability(self, env: SystemEnv, scale: int = 2) -> Availability:
+    def check_availability(self, env: SystemEnv, scale: int = 2,
+                           output_mode: OutputMode = DEFAULT_OUTPUT_MODE) -> Availability:
+        """output_mode 는 여기서 쓰지 않는다 — 1080p/4K 도 내부적으로는 같은 2× AI(scale) +
+        FFmpeg 리사이즈이므로, 로컬 가용성은 output_mode 와 무관하게 항상 같은 기준으로 판단한다.
+
+        STEP MAC-1: macOS(및 그 외 미검증 플랫폼)에서는 Real-ESRGAN/Vulkan 파이프라인을
+        아예 시도하지 않고 명확한 안내로 즉시 돌려준다 — 바이너리가 없어서 나는 일반적인
+        '다시 설치해 주세요' 메시지 대신, '이 플랫폼은 아직 지원하지 않는다'는 사실을 알려준다."""
+        unsupported = plat.local_upscale_unsupported_reason()
+        if unsupported:
+            return Availability(False, unsupported, f"local upscale unsupported on {plat.describe()}")
         try:
             self._exe()
         except BinaryNotFoundError as e:
@@ -160,7 +181,8 @@ class LocalNcnnProvider(UpscalerProvider):
 
     def upscale(self, job: Job, progress: ProgressCallback, env: SystemEnv | None = None) -> Path:
         cancel = job.cancel
-        scale = job.scale
+        scale = job.scale                              # Real-ESRGAN 자체 배율(항상 2)
+        mode = job.output_mode
         progress(Progress(Phase.ANALYZE))
         info = job.info or probe_video(job.input_path)
         job.info = info
@@ -173,12 +195,20 @@ class LocalNcnnProvider(UpscalerProvider):
         if gpu is None:
             raise UpconError("내 PC에서 AI 처리를 할 수 있는 그래픽카드를 찾지 못했습니다.", "no gpu at upscale()")
 
+        target_w, target_h = resolution.target_size(mode, info.width, info.height)
+        use_ai = resolution.needs_ai_upscale(mode, info.width, info.height)
+
         out_dir = Path(self.config.output_dir) if self.config.output_dir else None
-        output = job.output_path or ff.unique_output_path(info.path, scale, out_dir)
+        output = job.output_path or ff.unique_output_path_for_mode(info.path, mode, out_dir)
         job.output_path = output
         ff.ensure_writable_dir(output.parent)      # 30초 뒤가 아니라 지금 실패하도록
 
-        # 디스크 계획/검사
+        if not use_ai:
+            # 원본이 이미 목표 해상도 이상(예: 4K 원본 + 1080p 선택) → 불필요한 AI 확대를 피하고
+            # FFmpeg 리사이즈만 한다. GPU 가용성은 Router 가 이미 확인했으므로 여기선 안 쓸 뿐이다.
+            return self._plain_resize_job(info, output, target_w, target_h, cancel, progress)
+
+        # 디스크 계획/검사 (AI 경로 — 청크 BMP/PNG 를 쓴다)
         temp_root = tempfs.default_temp_root(self.config.temp_dir)
         plan = tempfs.plan_disk(info, scale, temp_root, output, self.config.temp_budget_mb,
                                 self.config.chunk_frames_min, self.config.chunk_frames_max)
@@ -186,10 +216,13 @@ class LocalNcnnProvider(UpscalerProvider):
         tempfs.check_disk(plan, output)
 
         progress(Progress(Phase.PREPARE, 0, info.nb_frames))
-        avail = self.check_availability(env or SystemEnv(gpus=[gpu]), scale)
+        avail = self.check_availability(env or SystemEnv(gpus=[gpu]), scale, mode)
         if not avail.ok:
             raise UpconError(avail.reason, avail.detail)
         cancel.raise_if_cancelled()
+
+        # AI 의 자연스러운 2× 결과가 이미 목표와 같으면(순수 2× 모드, 또는 우연히 일치) 리사이즈 생략
+        resize_target = None if (target_w, target_h) == (info.width * scale, info.height * scale) else (target_w, target_h)
 
         job_dir = tempfs.new_job_dir(temp_root)
         t0 = time.time()
@@ -197,7 +230,8 @@ class LocalNcnnProvider(UpscalerProvider):
         try:
             enc_name = ff.pick_encoder(self.config.output_encoder)
             try:
-                frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel, progress, enc_name)
+                frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
+                                                 progress, enc_name, resize_target)
             except UpconError as e:
                 if enc_name == "libx264" or "encoder" not in (e.detail or "").lower():
                     raise
@@ -208,9 +242,10 @@ class LocalNcnnProvider(UpscalerProvider):
                 if output.exists():
                     output.unlink()
                 progress(Progress(Phase.PREPARE, 0, info.nb_frames, "인코더를 바꿔 다시 시작합니다"))
-                frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel, progress, "libx264")
+                frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
+                                                 progress, "libx264", resize_target)
             progress(Progress(Phase.SAVE, frames_done, frames_done))
-            self._verify_output(output, info, frames_done)
+            self._verify_output(output, target_w, target_h, info)
         except BaseException:
             ff_out = output
             if ff_out.exists():
@@ -223,14 +258,56 @@ class LocalNcnnProvider(UpscalerProvider):
             tempfs.cleanup_dir(job_dir)
 
         dt = time.time() - t0
-        log.info("upscale done: gpu=%s model=%s src=%s %dx%d %.3ffps %.1fs frames=%d → %s | %.1fs (%.2f fps, %.2fx realtime)",
+        log.info("upscale done: gpu=%s model=%s src=%s %dx%d %.3ffps %.1fs frames=%d → %s %dx%d | %.1fs (%.2f fps, %.2fx realtime)",
                  gpu.name, self.spec.id, info.path.name, info.width, info.height, info.fps, info.duration_sec,
-                 frames_done, output.name, dt, frames_done / dt if dt else 0,
+                 frames_done, output.name, target_w, target_h, dt, frames_done / dt if dt else 0,
                  (info.duration_sec / dt) if dt else 0)
         return output
 
+    def _plain_resize_job(self, info: VideoInfo, output: Path, target_w: int, target_h: int,
+                          cancel: CancelToken, progress: ProgressCallback) -> Path:
+        """AI(ncnn) 없이 FFmpeg 만으로 목표 크기에 맞춘다 (원본이 이미 목표 해상도 이상일 때)."""
+        t0 = time.time()
+        total = max(info.nb_frames, 1)
+        last = [0]
+
+        def on_frame(n: int) -> None:
+            last[0] = n
+            progress(Progress(Phase.UPSCALE, n, max(total, n), f"{n} / {max(total, n)} 프레임 (크기 조정)"))
+
+        progress(Progress(Phase.PREPARE, 0, info.nb_frames, "AI 없이 크기만 맞춥니다 (원본이 이미 충분히 큼)"))
+        enc_name = ff.pick_encoder(self.config.output_encoder)
+        try:
+            try:
+                ff.run_plain_resize(info.path, output, info, target_w, target_h,
+                                    self.config.output_crf, self.config.output_preset, enc_name, cancel, on_frame)
+            except UpconError as e:
+                if enc_name == "libx264" or "encoder" not in (e.detail or "").lower():
+                    raise
+                log.warning("hardware encoder %s failed in plain resize (%s) → retrying with libx264",
+                           enc_name, e.detail[:200])
+                if output.exists():
+                    output.unlink()
+                progress(Progress(Phase.PREPARE, 0, info.nb_frames, "인코더를 바꿔 다시 시작합니다"))
+                ff.run_plain_resize(info.path, output, info, target_w, target_h,
+                                    self.config.output_crf, self.config.output_preset, "libx264", cancel, on_frame)
+            progress(Progress(Phase.SAVE, last[0], last[0]))
+            self._verify_output(output, target_w, target_h, info)
+        except BaseException:
+            if output.exists():
+                try:
+                    output.unlink()
+                except OSError:
+                    pass
+            raise
+        dt = time.time() - t0
+        log.info("plain resize done: src=%s %dx%d → %s %dx%d | %.1fs", info.path.name, info.width, info.height,
+                 output.name, target_w, target_h, dt)
+        return output
+
     def _run_pipeline(self, info: VideoInfo, output: Path, gpu: GpuInfo, scale: int, chunk_frames: int,
-                      job_dir: Path, cancel: CancelToken, progress: ProgressCallback, enc_name: str = "libx264") -> int:
+                      job_dir: Path, cancel: CancelToken, progress: ProgressCallback, enc_name: str = "libx264",
+                      resize_target: tuple[int, int] | None = None) -> int:
         w, h = info.width, info.height
         frame_bytes = w * h * 3
         header = ff.bmp_header(w, h)
@@ -256,9 +333,9 @@ class LocalNcnnProvider(UpscalerProvider):
             decoder = ff.start_frame_decoder(info.path, fps)
             decoder_stderr_thread = threading.Thread(target=_pump, args=(decoder.stderr, dec_err), daemon=True)
             decoder_stderr_thread.start()
-            log.info("encoder: %s", enc_name)
+            log.info("encoder: %s resize=%s", enc_name, resize_target)
             encoder = ff.start_encoder(output, info.path, info, fps, self.config.output_crf,
-                                       self.config.output_preset, enc_name)
+                                       self.config.output_preset, enc_name, resize_target)
             encoder_stderr_thread = threading.Thread(target=_pump, args=(encoder.stderr, enc_err), daemon=True)
             encoder_stderr_thread.start()
             feeder.start(encoder.stdin)
@@ -378,16 +455,20 @@ class LocalNcnnProvider(UpscalerProvider):
             raise UpconError(self._explain_ncnn_failure(err), f"ncnn rc={p.returncode}: {err[-600:]}")
 
     @staticmethod
-    def _verify_output(output: Path, info: VideoInfo, frames: int) -> None:
+    def _verify_output(output: Path, target_w: int, target_h: int, info: VideoInfo | None = None) -> None:
+        """결과가 정확히 target_w×target_h 인지 확인한다 (2× 든 1080p/4K 든 항상 정확히 일치해야
+        한다 — 예전의 '입력의 배수인가' 근사 체크는 1080p/4K 처럼 배수가 아닌 목표에는 맞지 않는다)."""
         if not output.exists() or output.stat().st_size == 0:
             raise UpconError("결과 파일이 만들어지지 않았습니다.", "output missing")
         out = probe_video(output)
-        if out.width != info.width * 2 and out.width % info.width != 0:
-            raise UpconError("결과 영상의 해상도가 예상과 다릅니다.", f"{out.width}x{out.height}")
-        if info.has_audio and not out.has_audio:
-            raise UpconError("결과 영상에 오디오가 들어가지 않았습니다.", "audio missing in output")
-        if abs(out.duration_sec - info.duration_sec) > max(1.0, info.duration_sec * 0.02):
-            log.warning("duration differs: src %.2fs out %.2fs", info.duration_sec, out.duration_sec)
+        if (out.width, out.height) != (target_w, target_h):
+            raise UpconError("결과 영상의 해상도가 예상과 다릅니다.",
+                             f"expected {target_w}x{target_h}, got {out.width}x{out.height}")
+        if info is not None:
+            if info.has_audio and not out.has_audio:
+                raise UpconError("결과 영상에 오디오가 들어가지 않았습니다.", "audio missing in output")
+            if abs(out.duration_sec - info.duration_sec) > max(1.0, info.duration_sec * 0.02):
+                log.warning("duration differs: src %.2fs out %.2fs", info.duration_sec, out.duration_sec)
         log.info("output verified: %s %dx%d %.3ffps %.2fs audio=%s size=%s",
                  output.name, out.width, out.height, out.fps, out.duration_sec, out.has_audio, out.size_text)
 

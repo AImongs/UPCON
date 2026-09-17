@@ -8,12 +8,18 @@ import struct
 import subprocess
 from pathlib import Path
 
+from upcon import platform as _plat
 from upcon.core.binaries import ffmpeg_path
+from upcon.core.constants import OutputMode, output_suffix
 from upcon.core.errors import UpconError
+from upcon.core.jobs import CancelledError, CancelToken
 from upcon.core.probe import VideoInfo
 
 log = logging.getLogger(__name__)
-CREATE_NO_WINDOW = 0x08000000
+# Windows 전용 콘솔창 숨김 플래그. 다른 플랫폼에서 0 이 아닌 creationflags 를 넘기면
+# subprocess 가 곧바로 ValueError 를 던진다 — 반드시 upcon.platform.NO_WINDOW_FLAGS 를 거쳐야 한다
+# (STEP MAC-1). 이름은 기존 호출부(local_ncnn.py 등)와의 호환을 위해 그대로 둔다.
+CREATE_NO_WINDOW = _plat.NO_WINDOW_FLAGS
 
 # MP4 컨테이너에 그대로 복사 가능한 오디오 코덱
 _MP4_AUDIO_COPY_OK = {"aac", "mp3", "ac3", "eac3", "alac", "opus"}
@@ -42,16 +48,27 @@ def ensure_writable_dir(d: Path) -> None:
                          f"output dir not writable: {d} ({type(e).__name__}: {e})")
 
 
-def unique_output_path(src: Path, scale: int, output_dir: Path | None = None) -> Path:
-    """scene01.mp4 → scene01_2x.mp4. 이미 있으면 scene01_2x_2.mp4, _3 … 기존 결과를 절대 덮어쓰지 않는다."""
-    base_dir = resolve_output_dir(src, output_dir)
-    stem = f"{src.stem}_{scale}x"
+def _unique_with_stem(base_dir: Path, stem: str) -> Path:
+    """stem.mp4 이 이미 있으면 stem_2.mp4, _3 … 기존 결과를 절대 덮어쓰지 않는다."""
     cand = base_dir / f"{stem}.mp4"
     n = 2
     while cand.exists():
         cand = base_dir / f"{stem}_{n}.mp4"
         n += 1
     return cand
+
+
+def unique_output_path(src: Path, scale: int, output_dir: Path | None = None) -> Path:
+    """scene01.mp4 → scene01_2x.mp4. (클라우드 Provider 전용 — 배율만 다루므로 그대로 유지한다.
+    로컬 Provider 의 출력 해상도 모드 기반 이름은 unique_output_path_for_mode 를 쓴다.)"""
+    base_dir = resolve_output_dir(src, output_dir)
+    return _unique_with_stem(base_dir, f"{src.stem}_{scale}x")
+
+
+def unique_output_path_for_mode(src: Path, mode: OutputMode, output_dir: Path | None = None) -> Path:
+    """scene01.mp4 → scene01_2x.mp4 / scene01_1080p.mp4 / scene01_4k.mp4. (로컬 Provider 전용)"""
+    base_dir = resolve_output_dir(src, output_dir)
+    return _unique_with_stem(base_dir, f"{src.stem}{output_suffix(mode)}")
 
 
 def fps_fraction(info: VideoInfo) -> str:
@@ -125,8 +142,13 @@ def _video_codec_args(encoder: str, crf: int, preset: str) -> list[str]:
 
 
 def start_encoder(dst: Path, src_for_audio: Path, info: VideoInfo, fps: str,
-                  crf: int = 18, preset: str = "medium", encoder: str = "libx264") -> subprocess.Popen:
-    """stdin 으로 들어오는 PNG 프레임들을 H.264 MP4 로 인코딩하고 원본 오디오를 붙인다."""
+                  crf: int = 18, preset: str = "medium", encoder: str = "libx264",
+                  resize: tuple[int, int] | None = None) -> subprocess.Popen:
+    """stdin 으로 들어오는 PNG 프레임들을 H.264 MP4 로 인코딩하고 원본 오디오를 붙인다.
+
+    resize: (width, height) 가 주어지고 들어오는 프레임 크기와 다르면(1080p/4K 출력 모드)
+    Lanczos 로 최종 크기를 맞춘다. None 이면 들어오는 프레임 크기를 그대로 쓴다(기존 2× 동작).
+    새 외부 라이브러리 없이 FFmpeg 에 이미 있는 표준 swscale 필터만 쓴다."""
     cmd = [str(ffmpeg_path()), "-v", "error", "-y",
            "-f", "image2pipe", "-framerate", fps, "-vcodec", "png", "-i", "pipe:0"]
     if info.has_audio:
@@ -137,11 +159,53 @@ def start_encoder(dst: Path, src_for_audio: Path, info: VideoInfo, fps: str,
             cmd += ["-c:a", "aac", "-b:a", "192k"]
     else:
         cmd += ["-map", "0:v:0"]
+    if resize:
+        cmd += ["-vf", f"scale={resize[0]}:{resize[1]}:flags=lanczos"]
     cmd += _video_codec_args(encoder, crf, preset)
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)]
     log.debug("encoder: %s", " ".join(cmd))
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             creationflags=CREATE_NO_WINDOW)
+
+
+def run_plain_resize(src: Path, dst: Path, info: VideoInfo, target_w: int, target_h: int,
+                     crf: int, preset: str, encoder: str, cancel: CancelToken,
+                     on_frame) -> None:
+    """AI 업스케일 없이 FFmpeg 만으로 원본을 target_w×target_h 로 리사이즈/재인코딩한다.
+
+    1080p/4K 출력 모드인데 원본이 이미 목표 크기 이상이면(예: 4K 원본에 1080p 선택) 불필요한
+    AI 확대를 피하려고 쓴다(resolution.needs_ai_upscale). 디코드→(AI 없이)→인코드를 FFmpeg
+    한 프로세스가 전부 처리하므로 청크/파이프 구조가 필요 없다 — 가장 단순한 경로.
+    on_frame(done_frames) 로 진행률을 보고한다(ffmpeg 자체 -progress 출력 기반)."""
+    cmd = [str(ffmpeg_path()), "-v", "error", "-y", "-nostdin", "-i", str(src),
+           "-map", "0:v:0"]
+    if info.has_audio:
+        cmd += ["-map", "0:a:0"]
+        cmd += ["-c:a", "copy"] if info.audio_codec in _MP4_AUDIO_COPY_OK else ["-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-vf", f"scale={target_w}:{target_h}:flags=lanczos"]
+    cmd += _video_codec_args(encoder, crf, preset)
+    cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            "-progress", "pipe:1", "-nostats", str(dst)]
+    log.debug("plain resize: %s", " ".join(cmd))
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW)
+    try:
+        for line in p.stdout:
+            if cancel.cancelled:
+                kill_process(p)
+                raise CancelledError()
+            if line.startswith("frame="):
+                try:
+                    on_frame(int(line.strip().split("=", 1)[1]))
+                except (ValueError, IndexError):
+                    pass
+        p.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        kill_process(p)
+        raise UpconError("결과 영상을 저장하는 데 시간이 너무 오래 걸립니다.", "plain resize timeout")
+    if p.returncode != 0 or not dst.exists():
+        stderr = p.stderr.read() if p.stderr else ""
+        raise UpconError("결과 영상을 저장하지 못했습니다.", f"plain resize rc={p.returncode}: {stderr[-800:]}")
 
 
 def bmp_header(width: int, height: int) -> bytes:

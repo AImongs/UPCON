@@ -10,7 +10,7 @@ import pytest
 from upcon.core import ffmpeg as ff
 from upcon.core import tempfs
 from upcon.core.config import AppConfig
-from upcon.core.constants import ProcessMode
+from upcon.core.constants import OutputMode, ProcessMode
 from upcon.core.env import GpuInfo, GpuVendor, SystemEnv, detect_system_env
 from upcon.core.errors import UpconError
 from upcon.core.jobs import CancelledError, Job, Phase
@@ -184,12 +184,12 @@ def test_hw_encoder_failure_falls_back_to_x264(cfg, env, monkeypatch, sample_480
     real_start = ffm.start_encoder
     calls = []
 
-    def fake_start(dst, src, info, fps, crf=18, preset="medium", encoder="libx264"):
+    def fake_start(dst, src, info, fps, crf=18, preset="medium", encoder="libx264", resize=None):
         calls.append(encoder)
         if encoder != "libx264":
             # 존재하지 않는 인코더 → ffmpeg 가 즉시 종료 (인코더 사망 상황 재현)
-            return real_start(dst, src, info, fps, crf, preset, "h264_nonexistent")
-        return real_start(dst, src, info, fps, crf, preset, encoder)
+            return real_start(dst, src, info, fps, crf, preset, "h264_nonexistent", resize)
+        return real_start(dst, src, info, fps, crf, preset, encoder, resize)
 
     monkeypatch.setattr(ffm, "start_encoder", fake_start)
     monkeypatch.setattr(ffm, "pick_encoder", lambda pref="auto": "h264_nvenc")
@@ -198,6 +198,86 @@ def test_hw_encoder_failure_falls_back_to_x264(cfg, env, monkeypatch, sample_480
     assert calls[0] == "h264_nvenc" and calls[-1] == "libx264"
     o = probe_video(out)
     assert (o.width, o.height) == (1708, 960) and o.has_audio
+
+
+# ---------------------------------------------------------------- STEP 10: 출력 해상도(1080p/4K)
+def test_upscale_1080p_landscape(cfg, env, sample_480p):
+    """854×480(가로) + 1080p 선택 → AI 2× 후 FFmpeg 로 정확히 1920×1080 까지 맞춘다."""
+    _gpu_required(env)
+    src = sample_480p
+    job = Job(input_path=src, scale=2, output_mode=OutputMode.FHD, info=probe_video(src))
+    out = LocalNcnnProvider(cfg).upscale(job, lambda p: None, env)
+    o = probe_video(out)
+    assert out.name == "sample_480p_1080p.mp4"
+    assert (o.width, o.height) == (1920, 1080)
+    assert o.has_audio and o.audio_codec == "aac"
+    assert abs(o.duration_sec - 5.0) < 0.1
+
+
+def test_upscale_1080p_portrait(cfg, env, sample_480p_portrait):
+    """480×854(세로) + 1080p 선택 → 정확히 1080×1920 (가로/세로 반대로 찌그러지지 않는지 확인)."""
+    _gpu_required(env)
+    src = sample_480p_portrait
+    job = Job(input_path=src, scale=2, output_mode=OutputMode.FHD, info=probe_video(src))
+    out = LocalNcnnProvider(cfg).upscale(job, lambda p: None, env)
+    o = probe_video(out)
+    assert out.name == "sample_480p_portrait_1080p.mp4"
+    assert (o.width, o.height) == (1080, 1920)
+    assert o.has_audio
+
+
+def test_upscale_4k_landscape(cfg, env, sample_480p):
+    """854×480 + 4K 선택 → 정확히 3840×2160. 짧은 5초 클립이라 '장시간 4K 테스트' 가 아니다."""
+    _gpu_required(env)
+    src = sample_480p
+    job = Job(input_path=src, scale=2, output_mode=OutputMode.UHD, info=probe_video(src))
+    out = LocalNcnnProvider(cfg).upscale(job, lambda p: None, env)
+    o = probe_video(out)
+    assert out.name == "sample_480p_4k.mp4"
+    assert (o.width, o.height) == (3840, 2160)
+
+
+def test_plain_resize_skips_ai_when_source_already_above_target(cfg, env, monkeypatch, sample_1080p_korean):
+    """1920×1080 원본 + 1080p 선택 = 이미 목표 해상도 → AI(ncnn) 를 아예 돌리지 않아야 한다."""
+    _gpu_required(env)
+    provider = LocalNcnnProvider(cfg)
+    ai_called = []
+    monkeypatch.setattr(provider, "_run_pipeline", lambda *a, **k: ai_called.append(1) or 0)
+    src = sample_1080p_korean
+    job = Job(input_path=src, scale=2, output_mode=OutputMode.FHD, info=probe_video(src))
+    out = provider.upscale(job, lambda p: None, env)
+    assert not ai_called, "이미 목표 해상도 이상인데 AI 업스케일(_run_pipeline)이 호출됐다"
+    o = probe_video(out)
+    assert (o.width, o.height) == (1920, 1080)
+
+
+def test_plain_resize_function_direct(tmp_path, sample_1080p_korean):
+    """ff.run_plain_resize() 자체를 GPU 없이 직접 검증한다 (AI 미사용 리사이즈 경로의 핵심 함수).
+    '이미 목표 이상' 정책의 실제 UI 에는 1080p/4K 두 모드뿐이지만, 함수 자체는 임의 크기로
+    줄이거나 늘릴 수 있어야 하므로 여기서는 축소(1920x1080 → 960x540)로 검증한다."""
+    from upcon.core.jobs import CancelToken
+    info = probe_video(sample_1080p_korean)
+    out = tmp_path / "small_resize.mp4"
+    ff.run_plain_resize(sample_1080p_korean, out, info, 960, 540, crf=23, preset="veryfast",
+                        encoder="libx264", cancel=CancelToken(), on_frame=lambda n: None)
+    o = probe_video(out)
+    assert (o.width, o.height) == (960, 540)
+    assert not o.has_audio                 # sample_1080p_korean 은 무음
+    assert abs(o.duration_sec - info.duration_sec) < 0.2
+
+
+def test_plain_resize_preserves_aac_audio_without_gpu(tmp_path, sample_480p):
+    """GPU 없이도 확인 가능한 AAC 오디오 보존 경로 (STEP MAC-1: macOS CI 에 GPU 가 없어도
+    FFmpeg 인코드/오디오 처리가 검증되도록 — sample_480p 는 AAC 오디오가 있다)."""
+    from upcon.core.jobs import CancelToken
+    info = probe_video(sample_480p)
+    out = tmp_path / "aac_resize.mp4"
+    ff.run_plain_resize(sample_480p, out, info, 640, 360, crf=23, preset="veryfast",
+                        encoder="libx264", cancel=CancelToken(), on_frame=lambda n: None)
+    o = probe_video(out)
+    assert (o.width, o.height) == (640, 360)
+    assert o.has_audio and o.audio_codec == "aac"
+    assert abs(o.duration_sec - info.duration_sec) < 0.2
 
 
 def test_missing_output_dir_falls_back_to_source_folder(tmp_path, caplog):

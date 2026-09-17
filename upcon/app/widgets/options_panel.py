@@ -1,4 +1,4 @@
-"""처리 방식(자동/내 PC/클라우드) 과 업스케일 배율 선택 카드."""
+"""처리 방식(자동/내 PC/클라우드) 과 출력 해상도(2×/1080p/4K) 선택 카드."""
 
 from __future__ import annotations
 
@@ -8,13 +8,14 @@ from PySide6.QtWidgets import (
 )
 
 from upcon.core.constants import (
-    DEFAULT_SCALE, PROCESS_MODE_HINTS, PROCESS_MODE_LABELS, SCALE_OPTIONS, ProcessMode,
+    DEFAULT_OUTPUT_MODE, OUTPUT_MODE_HINTS, OUTPUT_MODE_LABELS, PROCESS_MODE_HINTS, PROCESS_MODE_LABELS,
+    OutputMode, ProcessMode,
 )
 
 
 class OptionsPanel(QFrame):
-    modeChanged = Signal(object)   # ProcessMode
-    scaleChanged = Signal(int)
+    modeChanged = Signal(object)         # ProcessMode
+    outputModeChanged = Signal(object)   # OutputMode
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,7 +25,7 @@ class OptionsPanel(QFrame):
         outer.setContentsMargins(20, 12, 20, 12)
         outer.setSpacing(6)
 
-        # 한 줄: [처리 방식] ○자동 ○내 PC ○클라우드    |    [배율] ●2×
+        # 한 줄: [처리 방식] ○자동 ○내 PC ○클라우드    |    [출력 해상도] ●2× ○1080p ○4K
         row = QHBoxLayout()
         row.setSpacing(18)
         t1 = QLabel("처리 방식")
@@ -39,17 +40,17 @@ class OptionsPanel(QFrame):
             self._mode_buttons[mode] = rb
             row.addWidget(rb)
         row.addSpacing(24)
-        t2 = QLabel("업스케일 배율")
+        t2 = QLabel("출력 해상도")
         t2.setProperty("class", "cardTitle")
         row.addWidget(t2)
-        self.scale_group = QButtonGroup(self)
-        self._scale_buttons: dict[int, QRadioButton] = {}
-        for opt in SCALE_OPTIONS:
-            rb = QRadioButton(opt.label)
-            rb.setEnabled(opt.enabled)
-            rb.setProperty("scale", opt.factor)
-            self.scale_group.addButton(rb)
-            self._scale_buttons[opt.factor] = rb
+        self.output_mode_group = QButtonGroup(self)
+        self._output_mode_buttons: dict[OutputMode, QRadioButton] = {}
+        for m in OutputMode:
+            rb = QRadioButton(OUTPUT_MODE_LABELS[m])
+            rb.setProperty("output_mode", m.value)
+            rb.setToolTip(OUTPUT_MODE_HINTS[m])
+            self.output_mode_group.addButton(rb)
+            self._output_mode_buttons[m] = rb
             row.addWidget(rb)
         row.addStretch(1)
         outer.addLayout(row)
@@ -73,10 +74,10 @@ class OptionsPanel(QFrame):
         outer.addWidget(self.output_hint)
 
         self.mode_group.buttonToggled.connect(self._on_mode_toggled)
-        self.scale_group.buttonToggled.connect(self._on_scale_toggled)
+        self.output_mode_group.buttonToggled.connect(self._on_output_mode_toggled)
 
         self.set_mode(ProcessMode.AUTO)
-        self.set_scale(DEFAULT_SCALE)
+        self.set_output_mode(DEFAULT_OUTPUT_MODE)
 
     # ---- 상태 ----
     def mode(self) -> ProcessMode:
@@ -86,12 +87,12 @@ class OptionsPanel(QFrame):
     def set_mode(self, mode: ProcessMode) -> None:
         self._mode_buttons[mode].setChecked(True)
 
-    def scale(self) -> int:
-        b = self.scale_group.checkedButton()
-        return int(b.property("scale")) if b else DEFAULT_SCALE
+    def output_mode(self) -> OutputMode:
+        b = self.output_mode_group.checkedButton()
+        return OutputMode(b.property("output_mode")) if b else DEFAULT_OUTPUT_MODE
 
-    def set_scale(self, factor: int) -> None:
-        rb = self._scale_buttons.get(factor)
+    def set_output_mode(self, mode: OutputMode) -> None:
+        rb = self._output_mode_buttons.get(mode)
         if rb and rb.isEnabled():
             rb.setChecked(True)
 
@@ -108,6 +109,6 @@ class OptionsPanel(QFrame):
             self.mode_hint.setText(PROCESS_MODE_HINTS[mode])
             self.modeChanged.emit(mode)
 
-    def _on_scale_toggled(self, button, checked: bool) -> None:
+    def _on_output_mode_toggled(self, button, checked: bool) -> None:
         if checked:
-            self.scaleChanged.emit(int(button.property("scale")))
+            self.outputModeChanged.emit(OutputMode(button.property("output_mode")))

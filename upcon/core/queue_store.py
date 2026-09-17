@@ -10,6 +10,7 @@ import json
 import logging
 from pathlib import Path
 
+from upcon.core.constants import parse_output_mode
 from upcon.core.jobs import Job, JobStatus
 from upcon.core.paths import user_data_dir
 
@@ -24,7 +25,8 @@ def queue_file() -> Path:
 def save_queue(jobs: list[Job], path: Path | None = None) -> None:
     path = path or queue_file()
     data = [{
-        "id": j.id, "input_path": str(j.input_path), "scale": j.scale, "status": j.status.value,
+        "id": j.id, "input_path": str(j.input_path), "scale": j.scale,
+        "output_mode": j.output_mode.value, "status": j.status.value,
         "output_path": str(j.output_path) if j.output_path else "", "error_message": j.error_message,
         "provider_id": j.provider_id,
     } for j in jobs]
@@ -59,8 +61,9 @@ def load_queue(path: Path | None = None) -> list[Job]:
         if not p.exists():
             log.info("queue restore: missing file skipped (%s)", p.name)
             continue
-        job = Job(input_path=p, scale=int(d.get("scale", 2)), status=status,
-                  error_message=d.get("error_message", "") if status == JobStatus.FAILED else "",
+        # output_mode 가 없는 기존 UPCON 0.3.0 대기열이거나 값이 잘못돼도 항상 2× 로 안전하게 복원한다.
+        job = Job(input_path=p, scale=int(d.get("scale", 2)), output_mode=parse_output_mode(d.get("output_mode", "")),
+                  status=status, error_message=d.get("error_message", "") if status == JobStatus.FAILED else "",
                   provider_id=d.get("provider_id", ""))
         if status == JobStatus.INTERRUPTED:
             job.error_message = "이전 실행이 비정상 종료되어 중단되었습니다. '중단된 항목 다시 시작' 으로 다시 처리할 수 있습니다."

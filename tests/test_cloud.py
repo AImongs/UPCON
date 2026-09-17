@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 
 import httpx
@@ -171,8 +172,12 @@ def test_router_auto_local_free_message(mem_keyring):
     assert d.provider is not None and d.provider.kind == "local" and "무료" in d.message
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows 자격 증명 관리자 전용 테스트")
 def test_real_windows_keyring_roundtrip():
-    """실제 Windows 자격 증명 관리자에 가짜 값으로 저장→읽기→삭제 (사용자 키는 건드리지 않음)."""
+    """실제 Windows 자격 증명 관리자에 가짜 값으로 저장→읽기→삭제 (사용자 키는 건드리지 않음).
+    macOS Keychain 은 CI(헤드리스)에서 잠금 해제 없이 접근하면 멈추거나 실패할 수 있어
+    여기서는 검증하지 않는다(STEP MAC-1) — macOS 백엔드 선택 로직 자체는
+    tests/test_platform.py 가 실제 keyring 저장소에 접근하지 않고 검증한다."""
     import keyring as kr
     svc, user = "UPCON-test", "roundtrip"
     kr.set_password(svc, user, "TEST_VALUE")

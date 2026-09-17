@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from upcon.core.constants import DEFAULT_SCALE, ProcessMode
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, DEFAULT_SCALE, ProcessMode
 from upcon.core.paths import config_file
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,8 @@ class RoutingConfig:
 @dataclass
 class AppConfig:
     process_mode: str = ProcessMode.AUTO.value
-    scale: int = DEFAULT_SCALE
+    scale: int = DEFAULT_SCALE                    # AI/클라우드 실제 배율(항상 2). output_mode 와 다른 개념
+    output_mode: str = DEFAULT_OUTPUT_MODE.value   # 사용자가 고른 출력 방식: "2x" | "1080p" | "4k"
     output_dir: str = ""                         # 비어 있으면 원본 옆에 저장
     # '영상 추가' 대화상자가 시작할 폴더 = 마지막으로 영상을 추가한 폴더. 비어 있거나 없으면 동영상 폴더.
     last_open_dir: str = ""

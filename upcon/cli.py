@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from upcon.core.config import AppConfig
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode
 from upcon.core.env import detect_system_env
 from upcon.core.jobs import Job, Phase, Progress
 from upcon.core.logging_setup import setup_logging
@@ -39,6 +40,8 @@ def main() -> int:
     ap.add_argument("--model", default=None)
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--scale", type=int, default=2)
+    ap.add_argument("--mode", choices=[m.value for m in OutputMode], default=None,
+                    help="출력 해상도: 2x(기본)|1080p|4k (STEP 10)")
     ap.add_argument("--cancel-after", type=float, default=None, help="N초 후 취소 (테스트용)")
     ap.add_argument("--temp-budget-mb", type=int, default=None)
     ap.add_argument("--cloud", action="store_true", help="fal.ai FlashVSR 로 처리 (비용 발생, 확인 프롬프트 있음)")
@@ -66,7 +69,8 @@ def main() -> int:
         print(f"예상 비용: ${c.usd_display:.2f}  ({c.basis_text()})")
         if input("내 fal.ai 계정에 과금됩니다. 계속하려면 y 입력: ").strip().lower() != "y":
             return 3
-    job = Job(input_path=a.video, scale=a.scale, info=info)
+    output_mode = OutputMode(a.mode) if a.mode else DEFAULT_OUTPUT_MODE
+    job = Job(input_path=a.video, scale=a.scale, output_mode=output_mode, info=info)
 
     peak = {"bytes": 0}
     stop = False

@@ -9,14 +9,16 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from upcon import platform as _plat
 from upcon.core.binaries import ffprobe_path
-from upcon.core.constants import SUPPORTED_EXTENSIONS
+from upcon.core.constants import SUPPORTED_EXTENSIONS, OutputMode
 from upcon.core.errors import ProbeError, UnsupportedFileError
+from upcon.core.resolution import target_size
 
 log = logging.getLogger(__name__)
 
-# 콘솔 창이 뜨지 않도록 (Windows)
-_CREATE_NO_WINDOW = 0x08000000
+# 콘솔 창이 뜨지 않도록 (Windows 전용, 다른 플랫폼에서는 0 — STEP MAC-1)
+_CREATE_NO_WINDOW = _plat.NO_WINDOW_FLAGS
 
 
 @dataclass
@@ -55,6 +57,11 @@ class VideoInfo:
 
     def upscaled_resolution_text(self, scale: int) -> str:
         return f"{self.width * scale} × {self.height * scale}"
+
+    def target_resolution_text(self, mode: OutputMode) -> str:
+        """출력 해상도 모드(2×/1080p/4K) 기준 최종 크기. 큐 표의 '출력' 열, 처리 전 안내에 쓴다."""
+        w, h = target_size(mode, self.width, self.height)
+        return f"{w} × {h}"
 
 
 def format_bytes(n: int) -> str:

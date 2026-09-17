@@ -24,6 +24,7 @@ from fal_client.client import Completed, InProgress, Queued, StorageSettings
 from upcon.core import ffmpeg as ff
 from upcon.core import pricing, tempfs
 from upcon.core.config import AppConfig
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode
 from upcon.core.env import SystemEnv
 from upcon.core.errors import UpconError
 from upcon.core.jobs import CancelledError, Job, Phase, Progress, ProgressCallback
@@ -50,7 +51,14 @@ class FalFlashVSRProvider(UpscalerProvider):
         self.config = config
 
     # ------------------------------------------------------------ 가용성/예상
-    def check_availability(self, env: SystemEnv, scale: int = 2) -> Availability:
+    def check_availability(self, env: SystemEnv, scale: int = 2,
+                           output_mode: OutputMode = DEFAULT_OUTPUT_MODE) -> Availability:
+        """STEP 10: FlashVSR API 는 배율(upscale_factor)만 받고 목표 해상도 개념이 없다.
+        API 계약을 새로 만들지 않고(클라우드 모델 변경 금지), 2× 가 아닌 출력 모드는 아예
+        사용 불가로 보고한다 — 자동 모드에서 로컬로 넘어가거나, 사용자에게 정직하게 안내한다."""
+        if output_mode != OutputMode.TWO_X:
+            return Availability(False, "클라우드 GPU는 아직 2× 업스케일만 지원합니다. 1080p/4K는 내 PC GPU를 이용해 주세요.",
+                                f"cloud does not support output_mode={output_mode.value}")
         if not FalApi().has_key:
             return Availability(False, "클라우드 GPU를 쓰려면 설정 → 클라우드 업스케일에서 fal.ai 계정을 연결해 주세요.", "no fal key")
         return Availability(True, "클라우드 GPU(fal.ai FlashVSR)를 사용합니다.", "fal key present")

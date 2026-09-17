@@ -243,6 +243,72 @@ def test_output_hint_and_result_row(win, tmp_path):
     assert win.open_btn.isVisible() or win.open_btn.isVisibleTo(win)
 
 
+# ---------------------------------------------------------------- STEP 10: 출력 해상도(2×/1080p/4K)
+def test_output_mode_defaults_to_2x(win):
+    from upcon.core.constants import OutputMode
+    assert win.options.output_mode() == OutputMode.TWO_X
+    assert win.config.output_mode == "2x"
+
+
+def test_selecting_output_mode_updates_config_pending_jobs_and_hint(win, tmp_path):
+    from upcon.core.constants import OutputMode
+    a = _job(tmp_path, "a.mp4")                  # PENDING
+    b = _job(tmp_path, "b.mp4", JobStatus.DONE)  # 완료 항목은 영향받지 않아야 한다
+    _load(win, [a, b])
+    win.options.set_output_mode(OutputMode.FHD)  # 라디오 클릭과 동일 (buttonToggled 발생)
+    assert win.config.output_mode == "1080p"
+    assert a.output_mode == OutputMode.FHD, "대기 중인 항목은 즉시 새 출력 모드를 따라가야 한다"
+    assert b.output_mode == OutputMode.TWO_X, "이미 완료된 항목은 바뀌면 안 된다"
+    assert "_1080p" in win.options.output_hint.text()
+
+
+def test_queue_output_column_shows_target_resolution_per_mode(win, tmp_path):
+    """섹션 8: 원본/출력 해상도를 사용자가 바로 알 수 있어야 한다 — 대기열 표의 '출력' 열."""
+    from upcon.core.constants import OutputMode
+    j = _job(tmp_path, "landscape.mp4")           # _info() 기본값 854×480
+    _load(win, [j])
+    win.queue.update_job(j)
+    assert win.queue.table.item(0, 1).text() == "854 × 480"      # 원본
+    assert win.queue.table.item(0, 3).text() == "1708 × 960"     # 2× 기본값
+
+    j.output_mode = OutputMode.FHD
+    win.queue.update_job(j)
+    assert win.queue.table.item(0, 3).text() == "1920 × 1080"
+
+    j.output_mode = OutputMode.UHD
+    win.queue.update_job(j)
+    assert win.queue.table.item(0, 3).text() == "3840 × 2160"
+
+
+def test_start_all_applies_selected_output_mode_to_all_pending(win, tmp_path):
+    from upcon.core.constants import OutputMode
+    a, b = _job(tmp_path, "a.mp4"), _job(tmp_path, "b.mp4")
+    _load(win, [a, b])
+    win.options.set_output_mode(OutputMode.UHD)
+    n = win.controller.start_all(win.controller.local_ncnn, "test", win.config.scale, win.options.output_mode())
+    assert n == 2 and a.output_mode == OutputMode.UHD and b.output_mode == OutputMode.UHD
+    win.controller.stop_all()
+
+
+def test_corrupted_output_mode_in_config_falls_back_to_2x_without_crash(qapp, tmp_path, monkeypatch):
+    """손상된 config.json(output_mode="garbage")을 읽어도 UI 가 죽지 않고 2× 로 뜬다."""
+    from upcon.core.constants import OutputMode
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("UPCON_DATA_DIR", str(data))
+    from upcon.app.controller import Controller
+    monkeypatch.setattr(Controller, "detect_env_async", lambda self: None)
+    cfg = AppConfig()
+    cfg.output_mode = "garbage-value"
+    from upcon.app.main_window import MainWindow
+    w = MainWindow(cfg)
+    try:
+        assert w.options.output_mode() == OutputMode.TWO_X
+    finally:
+        w.controller.shutdown()
+        w.close()
+
+
 # ---------------------------------------------------------------- M10: 완료 후 새 파일 추가 → 대기 상태
 def test_adding_file_after_finish_resets_progress_panel(win, tmp_path, monkeypatch):
     from upcon.app.controller import Controller

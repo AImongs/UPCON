@@ -16,8 +16,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from upcon import platform as _plat
+
 log = logging.getLogger(__name__)
-_CREATE_NO_WINDOW = 0x08000000
+_CREATE_NO_WINDOW = _plat.NO_WINDOW_FLAGS
 
 
 class GpuVendor(str, Enum):
@@ -95,7 +97,14 @@ class ModelRequirements:
 
 # --------------------------------------------------------------------------- Vulkan
 def _vulkan_devices() -> list[GpuInfo]:
-    """vulkan-1.dll 로 물리 장치를 열거한다 (Vulkan SDK 불필요, 드라이버 런타임만 있으면 됨)."""
+    """vulkan-1.dll 로 물리 장치를 열거한다 (Vulkan SDK 불필요, 드라이버 런타임만 있으면 됨).
+
+    ctypes.WinDLL 는 Windows 가 아니면 애초에 존재하지 않는 속성이라(AttributeError),
+    이 함수 자체를 Windows 전용으로 막는다 — macOS/Linux 로컬 업스케일 미지원은
+    upcon.platform.local_upscale_unsupported_reason() 이 이미 안내하므로, 여기서는
+    그냥 '장치 없음'을 돌려주면 된다(STEP MAC-1)."""
+    if not _plat.IS_WINDOWS:
+        return []
     try:
         vk = ctypes.WinDLL("vulkan-1.dll")
     except OSError:
@@ -259,21 +268,30 @@ def detect_system_env() -> SystemEnv:
         os_version=f"{platform.system()} {platform.release()} ({platform.version()})",
         cpu_name=platform.processor() or os.environ.get("PROCESSOR_IDENTIFIER", ""),
     )
-    try:
-        kernel32 = ctypes.windll.kernel32
+    if _plat.IS_WINDOWS:
+        try:
+            kernel32 = ctypes.windll.kernel32
 
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
-                        ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
-                        ("ullTotalPageFile", ctypes.c_uint64), ("ullAvailPageFile", ctypes.c_uint64),
-                        ("ullTotalVirtual", ctypes.c_uint64), ("ullAvailVirtual", ctypes.c_uint64),
-                        ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                            ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
+                            ("ullTotalPageFile", ctypes.c_uint64), ("ullAvailPageFile", ctypes.c_uint64),
+                            ("ullTotalVirtual", ctypes.c_uint64), ("ullAvailVirtual", ctypes.c_uint64),
+                            ("ullAvailExtendedVirtual", ctypes.c_uint64)]
 
-        ms = MEMORYSTATUSEX(ctypes.sizeof(MEMORYSTATUSEX))
-        kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
-        env.ram_mb = int(ms.ullTotalPhys // (1024 * 1024))
-    except Exception:
-        pass
+            ms = MEMORYSTATUSEX(ctypes.sizeof(MEMORYSTATUSEX))
+            kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+            env.ram_mb = int(ms.ullTotalPhys // (1024 * 1024))
+        except Exception:
+            pass
+    elif _plat.IS_MACOS:
+        try:
+            # sysctl 은 macOS 표준 도구다 — 별도 의존성 없이 총 물리 메모리(바이트)를 읽는다.
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+                                 timeout=5).stdout.strip()
+            env.ram_mb = int(out) // (1024 * 1024)
+        except Exception:
+            pass
 
     env.gpus = _merge(_vulkan_devices(), _nvidia_devices())
     log.info("system env: %s | RAM %d MB | %s", env.os_version, env.ram_mb, env.summary())

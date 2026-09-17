@@ -11,6 +11,7 @@ import pytest
 
 from upcon.core import ffmpeg as ff, queue_store
 from upcon.core.config import AppConfig
+from upcon.core.constants import OutputMode
 from upcon.core.env import detect_system_env
 from upcon.core.errors import UpconError
 from upcon.core.jobs import CancelledError, Job, JobManager, JobStatus, Phase, Progress
@@ -201,6 +202,57 @@ def test_queue_persistence_roundtrip(tmp_path):
     assert names == [("a.mp4", JobStatus.PENDING), ("b.mp4", JobStatus.INTERRUPTED), ("d.mp4", JobStatus.FAILED)]
     assert "중단" in restored[1].error_message and restored[2].error_message == "깨짐"
     assert all(j.info is None for j in restored)         # 정보는 다시 분석
+
+
+# ---------------------------------------------------------------- STEP 10: output_mode 호환성
+def test_queue_persistence_roundtrips_output_mode(tmp_path):
+    """새 output_mode 값(2x/1080p/4k)이 저장/복원 모두에서 그대로 유지돼야 한다."""
+    p = tmp_path / "q.json"
+    a = _job(tmp_path, "a.mp4")
+    a.output_mode = OutputMode.FHD
+    b = _job(tmp_path, "b.mp4")
+    b.output_mode = OutputMode.UHD
+    queue_store.save_queue([a, b], p)
+    restored = {j.input_path.name: j.output_mode for j in queue_store.load_queue(p)}
+    assert restored == {"a.mp4": OutputMode.FHD, "b.mp4": OutputMode.UHD}
+
+
+def test_queue_load_without_output_mode_falls_back_to_2x(tmp_path):
+    """UPCON 0.3.0 이 저장한 queue.json 에는 output_mode 키가 아예 없다 — 자동으로 2× 로 취급."""
+    p = tmp_path / "q.json"
+    src = tmp_path / "old.mp4"
+    src.write_bytes(b"x")
+    import json
+    p.write_text(json.dumps([{
+        "id": "abcd1234", "input_path": str(src), "scale": 2, "status": "pending",
+        "output_path": "", "error_message": "", "provider_id": "",
+    }]), encoding="utf-8")
+    restored = queue_store.load_queue(p)
+    assert len(restored) == 1 and restored[0].output_mode == OutputMode.TWO_X
+
+
+def test_queue_load_with_invalid_output_mode_does_not_crash(tmp_path):
+    """손상되거나 알 수 없는 output_mode 값이 들어와도 앱이 죽지 않고 2× 로 안전하게 대체한다."""
+    p = tmp_path / "q.json"
+    src = tmp_path / "corrupt.mp4"
+    src.write_bytes(b"x")
+    import json
+    for bad in ("8k", "", None, 123, "2X"):
+        p.write_text(json.dumps([{
+            "id": "abcd1234", "input_path": str(src), "scale": 2, "output_mode": bad, "status": "pending",
+            "output_path": "", "error_message": "", "provider_id": "",
+        }]), encoding="utf-8")
+        restored = queue_store.load_queue(p)
+        assert len(restored) == 1 and restored[0].output_mode == OutputMode.TWO_X, f"bad value {bad!r} crashed or mis-parsed"
+
+
+def test_appconfig_load_without_output_mode_key_falls_back_to_2x(tmp_path):
+    """기존 UPCON 0.3.0 config.json(= output_mode 키가 없음)을 읽어도 오류 없이 2× 로 동작해야 한다."""
+    import json
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"process_mode": "auto", "scale": 2, "output_dir": ""}), encoding="utf-8")
+    cfg = AppConfig.load(p)
+    assert cfg.output_mode == OutputMode.TWO_X.value
 
 
 # ---------------------------------------------------------------- 출력 파일명 충돌

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -14,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from upcon import APP_NAME, APP_TAGLINE, APP_VERSION
+from upcon import platform as plat
 from upcon.app import file_dialogs
 from upcon.app.about_dialog import AboutDialog
 from upcon.app.cloud_settings import CloudSettingsDialog
@@ -22,7 +21,7 @@ from upcon.app.widgets.options_panel import OptionsPanel
 from upcon.app.widgets.progress_panel import ProgressPanel
 from upcon.app.widgets.queue_panel import QueuePanel
 from upcon.core.config import AppConfig
-from upcon.core.constants import OUTPUT_SUFFIX_TEMPLATE, ProcessMode
+from upcon.core.constants import DEFAULT_SCALE, OutputMode, ProcessMode, output_suffix, parse_output_mode
 from upcon.core.env import SystemEnv
 from upcon.core.eta import EtaEstimator, format_eta
 from upcon.core.jobs import Job, JobStatus, Phase
@@ -122,7 +121,7 @@ class MainWindow(QMainWindow):
         # 옵션
         self.options = OptionsPanel()
         self.options.modeChanged.connect(self._on_mode_changed)
-        self.options.scaleChanged.connect(self._on_scale_changed)
+        self.options.outputModeChanged.connect(self._on_output_mode_changed)
         lay.addWidget(self.options)
 
         # 버튼 줄
@@ -163,13 +162,13 @@ class MainWindow(QMainWindow):
             self.options.set_mode(ProcessMode(self.config.process_mode))
         except ValueError:
             self.options.set_mode(ProcessMode.AUTO)
-        self.options.set_scale(self.config.scale)
+        self.options.set_output_mode(parse_output_mode(self.config.output_mode))
         self.queue.set_start_dir(self.config.last_open_dir)
         self._refresh_output_hint()
 
     def output_hint_text(self) -> str:
-        """결과 저장 규칙을 초보자 문장으로. 예: 원본 옆 / 파일명 뒤 _2x."""
-        suffix = OUTPUT_SUFFIX_TEMPLATE.format(scale=self.options.scale())
+        """결과 저장 규칙을 초보자 문장으로. 예: 원본 옆 / 파일명 뒤 _2x·_1080p·_4k."""
+        suffix = output_suffix(self.options.output_mode())
         if self.config.output_dir:
             return f"결과 영상은 {self.config.output_dir} 폴더에 파일명 뒤에 {suffix}가 붙어 저장됩니다."
         return (f"결과 영상은 원본 영상과 같은 폴더에 파일명 뒤에 {suffix}가 붙어 저장됩니다. "
@@ -205,7 +204,7 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------- 대기열
     def add_files(self, paths: list[Path]) -> None:
         paths = [Path(p) for p in paths]
-        added, skipped = self.controller.add_files(paths, self.options.scale())
+        added, skipped = self.controller.add_files(paths, self.options.output_mode())
         log.info("queue add: %d added, %d skipped", added, skipped)
         if added:
             d = file_dialogs.remember_dir(paths)
@@ -279,12 +278,12 @@ class MainWindow(QMainWindow):
         self.config.save()
         self._refresh_cost()
 
-    def _on_scale_changed(self, scale: int) -> None:
-        self.config.scale = scale
+    def _on_output_mode_changed(self, mode: OutputMode) -> None:
+        self.config.output_mode = mode.value
         self.config.save()
         for j in self.controller.jobs.jobs:
             if j.status == JobStatus.PENDING:
-                j.scale = scale
+                j.output_mode = mode
         self._refresh_table()
         self._refresh_output_hint()
 
@@ -300,7 +299,9 @@ class MainWindow(QMainWindow):
     def _refresh_cost(self) -> None:
         cloud = self._cloud_would_be_used()
         self.queue.set_show_cost(cloud)
-        total, n = self.controller.total_cloud_cost(self.options.scale())
+        # 클라우드는 항상 고정 배율(DEFAULT_SCALE) 로만 처리한다 — 출력 해상도 선택(2×/1080p/4K)은
+        # 로컬 전용 개념이라 클라우드 비용 계산에는 영향을 주지 않는다.
+        total, n = self.controller.total_cloud_cost(DEFAULT_SCALE)
         if cloud and n:
             text = f"클라우드 GPU 사용 시 전체 예상 비용: 약 {format_usd(total)} ({n}개)"
             if self.config.krw_per_usd > 0:
@@ -323,7 +324,7 @@ class MainWindow(QMainWindow):
         if self.controller.env is None:
             return self.last_decision
         try:
-            return self.controller.decide(self.options.mode(), self.options.scale())
+            return self.controller.decide(self.options.mode(), DEFAULT_SCALE, self.options.output_mode())
         except Exception as e:  # noqa: BLE001 - 안내 문구 때문에 UI 가 죽지 않게
             log.warning("hint decision failed: %s", e)
             return self.last_decision
@@ -335,8 +336,9 @@ class MainWindow(QMainWindow):
         s = self.controller.summary()
         if s.pending == 0:
             return
-        scale = self.options.scale()
-        decision = self.controller.decide(self.options.mode(), scale)
+        scale = DEFAULT_SCALE
+        output_mode = self.options.output_mode()
+        decision = self.controller.decide(self.options.mode(), scale, output_mode)
         if decision.provider is None:
             self._warn("업스케일을 시작할 수 없습니다", decision.message)
             return
@@ -344,7 +346,7 @@ class MainWindow(QMainWindow):
             total, n = self.controller.total_cloud_cost(scale)
             if not self._confirm_cloud(n, total, decision.message):
                 return
-        n = self.controller.start_all(decision.provider, decision.message, scale)
+        n = self.controller.start_all(decision.provider, decision.message, scale, output_mode)
         log.info("batch start: %d files via %s", n, decision.provider.id)
         self._set_running_ui(True)
         self._eta.reset()
@@ -454,15 +456,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 결과
     def _open_result_of(self, job: Job) -> None:
         if job.output_path and job.output_path.exists():
-            subprocess.Popen(["explorer", "/select,", str(job.output_path)])
+            plat.reveal_in_file_manager(job.output_path)
 
     def _open_result_folder(self) -> None:
         sel = [j for j in self.queue.selected_jobs() if j.status == JobStatus.DONE and j.output_path]
         target = sel[0].output_path if sel else self.last_output
         if target and target.exists():
-            subprocess.Popen(["explorer", "/select,", str(target)])
+            plat.reveal_in_file_manager(target)
         elif target:
-            os.startfile(str(target.parent))
+            plat.open_folder(target.parent)
 
     def _open_about(self) -> None:
         AboutDialog(self).exec()

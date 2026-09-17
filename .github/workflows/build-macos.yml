@@ -1,0 +1,203 @@
+name: Build macOS (UPCON)
+
+# STEP MAC-1 — Windows 개발 PC에는 Mac 이 없어서 macOS Runner 로 빌드/검증한다.
+# 과거 AutoCon 과 같은 방식(GitHub Actions macOS Runner 로 .app/.dmg 빌드).
+#
+# 이 워크플로는 오직 macOS 산출물(.app/.dmg)만 다룬다. Windows Installer(packaging/upcon.iss,
+# build_installer.py)는 별도이며 이 워크플로가 건드리지 않는다.
+#
+# 아키텍처: 우선 Apple Silicon(arm64, macos-14 러너)을 기본으로 한다. Intel(x64, macos-13)은
+# workflow_dispatch 의 build_x64 입력을 켰을 때만 매트릭스에 추가된다 — 이번 STEP에서
+# universal binary 는 만들지 않는다(요청사항 그대로). macos-14/macos-13 은 2026-09 기준
+# GitHub 공식 macOS Runner 라벨이다(macos-14 = Apple Silicon arm64, macos-13 = Intel x64).
+# "latest" 별칭 대신 라벨을 못박아 재현성을 높인다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_x64:
+        description: "Intel x64(macos-13)도 함께 빌드 (기본: arm64만)"
+        type: boolean
+        default: false
+      run_pytest:
+        description: "pytest 전체 실행"
+        type: boolean
+        default: true
+  push:
+    branches: [main, master]
+    paths:
+      - "upcon/**"
+      - "packaging/upcon_macos.spec"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - ".github/workflows/build-macos.yml"
+
+permissions:
+  contents: read
+
+env:
+  # fal.ai 유료 inference 금지 / 실제 API Key 사용 금지 — 이 워크플로에는 fal.ai Secrets 를
+  # 등록하지 않았고, pytest 는 --run-cloud 를 주지 않는 한 유료 통합 테스트를 실행하지 않는다
+  # (tests/conftest.py 의 기존 정책 그대로).
+  PYTHONUTF8: "1"
+  QT_QPA_PLATFORM: "offscreen"   # 실제 디스플레이 유무와 무관하게 항상 같은 방식으로 검증
+
+jobs:
+  # build_x64 입력에 따라 macOS 빌드 매트릭스를 동적으로 만든다 (기본: arm64 만).
+  matrix-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event.inputs.build_x64 }}" = "true" ]; then
+            echo 'matrix={"include":[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-13","arch":"x64"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"runner":"macos-14","arch":"arm64"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: macOS ${{ matrix.arch }} (${{ matrix.runner }})
+    needs: matrix-setup
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix-setup.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show runner/Python architecture (섹션 13)
+        run: |
+          echo "=== Runner architecture ==="
+          uname -m
+          sw_vers
+          echo "=== Python architecture ==="
+          python3 -c "import platform; print(platform.machine(), platform.python_version())"
+          file "$(python3 -c 'import sys; print(sys.executable)')"
+
+      - name: Install FFmpeg/FFprobe (Homebrew — 재현성 확인을 위해 버전을 로그에 남긴다)
+        run: |
+          brew install ffmpeg
+          echo "=== FFmpeg/FFprobe 버전 (재현성 기록용) ==="
+          ffmpeg -version
+          ffprobe -version
+          echo "=== FFmpeg architecture ==="
+          file "$(command -v ffmpeg)"
+          file "$(command -v ffprobe)"
+
+      - name: Install Python dependencies (런타임 + 개발/테스트)
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Verify PySide6 import
+        run: python3 -c "import PySide6; from PySide6.QtCore import qVersion; print('PySide6 OK, Qt', qVersion())"
+
+      - name: Verify UPCON module import + macOS platform selection
+        run: |
+          python3 -c "
+          import upcon
+          from upcon import platform as plat
+          assert plat.IS_MACOS, f'IS_MACOS 가 True 여야 하는데 {plat.describe()}'
+          print('upcon', upcon.APP_VERSION, '|', plat.describe())
+          "
+
+      - name: Run pytest (GPU 필요한 로컬 업스케일 테스트는 자동 skip)
+        if: github.event.inputs.run_pytest != 'false'
+        env:
+          UPCON_DATA_DIR: ${{ runner.temp }}/upcon_pytest_data
+        run: |
+          python3 -m pytest -q --junitxml=pytest-results-${{ matrix.arch }}.xml
+          echo "GPU 의존 테스트(Real-ESRGAN 로컬 업스케일)는 이 macOS Runner 에 GPU 가 없어" \
+               "자동으로 skip 됩니다 — 실패가 아니라 '검증 대상 아님' 입니다."
+
+      - name: Headless smoke check (섹션 12 — config/데이터경로/keyring/FFmpeg/MainWindow)
+        env:
+          UPCON_DATA_DIR: ${{ runner.temp }}/upcon_smoke_data
+        run: python3 scripts/macos_ci_smoke.py
+
+      - name: Build UPCON.app (PyInstaller)
+        run: |
+          python3 -m PyInstaller packaging/upcon_macos.spec --noconfirm --distpath dist --workpath build
+          echo "=== .app 번들 구조 확인 (섹션 12) ==="
+          test -d "dist/UPCON.app" && echo "OK: UPCON.app 존재"
+          test -d "dist/UPCON.app/Contents/MacOS" && echo "OK: Contents/MacOS 존재"
+          test -f "dist/UPCON.app/Contents/Info.plist" && echo "OK: Info.plist 존재"
+          test -d "dist/UPCON.app/Contents/Resources" && echo "OK: Contents/Resources 존재"
+          test -x "dist/UPCON.app/Contents/MacOS/UPCON" && echo "OK: 실행 파일 존재 + 실행 권한"
+          echo "=== UPCON executable architecture (섹션 13) ==="
+          file "dist/UPCON.app/Contents/MacOS/UPCON"
+          lipo -info "dist/UPCON.app/Contents/MacOS/UPCON" || true
+
+      - name: Verify architecture matches target (섹션 13 — Rosetta 가정 안 함)
+        run: |
+          EXPECT="${{ matrix.arch }}"
+          ACTUAL="$(lipo -archs "dist/UPCON.app/Contents/MacOS/UPCON" 2>/dev/null || file "dist/UPCON.app/Contents/MacOS/UPCON")"
+          echo "target=$EXPECT actual=$ACTUAL"
+          case "$EXPECT" in
+            arm64) echo "$ACTUAL" | grep -qi "arm64" || { echo "::error::실행파일이 arm64 가 아닙니다: $ACTUAL"; exit 1; } ;;
+            x64)   echo "$ACTUAL" | grep -qi "x86_64" || { echo "::error::실행파일이 x86_64 가 아닙니다: $ACTUAL"; exit 1; } ;;
+          esac
+
+      - name: Build DMG (섹션 10)
+        run: |
+          VERSION="$(python3 -c 'from upcon.version import __version__; print(__version__)')"
+          DMG_NAME="UPCON_${VERSION}_macOS_${{ matrix.arch }}.dmg"
+          echo "DMG_NAME=$DMG_NAME" >> "$GITHUB_ENV"
+          STAGE="$(mktemp -d)/UPCON_dmg_stage"
+          mkdir -p "$STAGE"
+          cp -R "dist/UPCON.app" "$STAGE/UPCON.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "UPCON ${VERSION}" -srcfolder "$STAGE" -ov -format UDZO "$DMG_NAME"
+          echo "=== DMG 생성 확인 ==="
+          test -f "$DMG_NAME" && echo "OK: $DMG_NAME 생성됨 ($(du -h "$DMG_NAME" | cut -f1))"
+
+      - name: Verify DMG mounts and contains UPCON.app (섹션 12)
+        run: |
+          MOUNT_DIR="$(mktemp -d)"
+          hdiutil attach "$DMG_NAME" -mountpoint "$MOUNT_DIR" -nobrowse -readonly -noautoopen
+          echo "=== DMG 마운트 후 내용 ==="
+          ls -la "$MOUNT_DIR"
+          test -d "$MOUNT_DIR/UPCON.app" && echo "OK: DMG 안에 UPCON.app 존재"
+          test -x "$MOUNT_DIR/UPCON.app/Contents/MacOS/UPCON" && echo "OK: DMG 안 실행 파일 존재"
+          test -L "$MOUNT_DIR/Applications" && echo "OK: Applications 심볼릭 링크 존재 (드래그 설치용)"
+          hdiutil detach "$MOUNT_DIR"
+
+      - name: Unsigned build 안내 (섹션 10/16 — 코드서명/Notarization/Gatekeeper 우회 없음)
+        run: |
+          echo "이 빌드는 서명되지 않은(Unsigned) 개발 빌드입니다."
+          echo "코드서명, Apple Developer 인증서, Notarization 을 하지 않았습니다."
+          echo "Gatekeeper 를 비활성화하거나 우회하는 스크립트도 포함하지 않았습니다."
+          codesign -dv "dist/UPCON.app" 2>&1 || echo "(예상된 결과: 서명 없음)"
+
+      - name: Upload UPCON.app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UPCON-app-${{ matrix.arch }}
+          path: dist/UPCON.app
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UPCON-dmg-${{ matrix.arch }}
+          path: ${{ env.DMG_NAME }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload pytest results
+        if: always() && github.event.inputs.run_pytest != 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results-${{ matrix.arch }}
+          path: pytest-results-${{ matrix.arch }}.xml
+          if-no-files-found: warn
+          retention-days: 14

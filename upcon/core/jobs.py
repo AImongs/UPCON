@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode
 from upcon.core.errors import UpconError
 from upcon.core.probe import VideoInfo
 
@@ -121,7 +122,8 @@ ProgressCallback = Callable[[Progress], None]
 @dataclass
 class Job:
     input_path: Path
-    scale: int
+    scale: int                                          # AI/클라우드 실제 배율(항상 2) — output_mode 와 다른 개념
+    output_mode: OutputMode = DEFAULT_OUTPUT_MODE         # 사용자가 고른 출력 방식(2×/1080p/4K)
     info: VideoInfo | None = None
     output_path: Path | None = None
     provider_id: str = ""

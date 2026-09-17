@@ -10,13 +10,14 @@ import shutil
 from functools import lru_cache
 from pathlib import Path
 
+from upcon import platform as _plat
 from upcon.core.errors import BinaryNotFoundError
 from upcon.core.paths import bundled_bin_dir
 
 
 @lru_cache(maxsize=None)
 def find_binary(name: str) -> Path:
-    exe = f"{name}.exe"
+    exe = _plat.bundled_binary_name(name)          # Windows 만 .exe (STEP MAC-1)
     bundled = bundled_bin_dir() / exe
     if bundled.exists():
         return bundled

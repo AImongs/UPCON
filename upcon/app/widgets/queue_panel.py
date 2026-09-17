@@ -217,7 +217,7 @@ class QueuePanel(QFrame):
         self.table.item(r, COL_NAME).setToolTip(str(job.input_path))
         self.table.item(r, COL_SRC).setText(info.resolution_text if info else "…")
         self.table.item(r, COL_DUR).setText(info.duration_text if info else "…")
-        self.table.item(r, COL_OUT).setText(info.upscaled_resolution_text(job.scale) if info else "…")
+        self.table.item(r, COL_OUT).setText(info.target_resolution_text(job.output_mode) if info else "…")
         st = self.table.item(r, COL_STATUS)
         st.setText(job.status_label)
         st.setForeground(QColor(_STATUS_COLORS.get(job.status, "#374151")))
