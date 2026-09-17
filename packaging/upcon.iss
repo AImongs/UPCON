@@ -110,9 +110,21 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; skipifsilent 는 Setup 이 스스로 (very) silent 라고 인식할 때만 이 항목을 건너뛴다 (공식 동작,
+; ISetup.chm topic_runsection 확인됨). Check: 는 같은 정책을 [Code] 의 WizardSilent() 로 독립적으로
+; 한 번 더 강제하는 2중 안전장치다 — skipifsilent 플래그가 실수로 지워지는 미래의 편집 실수를 막는다.
+; (두 메커니즘 모두 Setup 이 실제로 수신한 명령줄을 근거로 판단하므로, 명령줄 자체가 셸에 의해
+; 훼손되는 경우까지는 막지 못한다 — 그건 호출 쪽 책임이다. STEP 8-1/9-2 참고.)
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent; Check: ShouldLaunchAfterInstall
 
 [Code]
+// silent/very silent 설치에서는 설치 완료 후 UPCON 을 자동 실행하지 않는다.
+// WizardSilent 는 Inno Setup 공식 Pascal Scripting 함수(Prototype: function WizardSilent: Boolean).
+function ShouldLaunchAfterInstall(): Boolean;
+begin
+  Result := not WizardSilent();
+end;
+
 // 제거 시 사용자 데이터를 조용히 지우지 않는다. 기본값은 '보존'이며, 명시적으로 동의할 때만 삭제한다.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
