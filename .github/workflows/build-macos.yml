@@ -6,11 +6,16 @@ name: Build macOS (UPCON)
 # 이 워크플로는 오직 macOS 산출물(.app/.dmg)만 다룬다. Windows Installer(packaging/upcon.iss,
 # build_installer.py)는 별도이며 이 워크플로가 건드리지 않는다.
 #
-# 아키텍처: 우선 Apple Silicon(arm64, macos-14 러너)을 기본으로 한다. Intel(x64, macos-13)은
+# 아키텍처: 우선 Apple Silicon(arm64, macos-15 러너)을 기본으로 한다. Intel(x64) 은
 # workflow_dispatch 의 build_x64 입력을 켰을 때만 매트릭스에 추가된다 — 이번 STEP에서
-# universal binary 는 만들지 않는다(요청사항 그대로). macos-14/macos-13 은 2026-09 기준
-# GitHub 공식 macOS Runner 라벨이다(macos-14 = Apple Silicon arm64, macos-13 = Intel x64).
-# "latest" 별칭 대신 라벨을 못박아 재현성을 높인다.
+# universal binary 는 만들지 않는다(요청사항 그대로). "latest" 별칭 대신 라벨을 못박아
+# 재현성을 높인다.
+#
+# 2026-09-17 STEP MAC-2 에서 macos-14 → macos-15 로 변경: actions/runner-images 공식
+# 문서(github.com/actions/runner-images) 기준으로 macos-14 는 현재 deprecated 상태이고,
+# macos-13(Intel x64) 은 이미 제거되어 라벨 자체가 존재하지 않는다. 이번 STEP 은 arm64
+# 빌드만 실행하므로 macos-13 은 고치지 않고 그대로 두었다 — build_x64 경로를 쓸 때 별도로
+# 손봐야 한다.
 
 on:
   workflow_dispatch:
@@ -52,9 +57,9 @@ jobs:
       - id: set
         run: |
           if [ "${{ github.event.inputs.build_x64 }}" = "true" ]; then
-            echo 'matrix={"include":[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-13","arch":"x64"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"runner":"macos-15","arch":"arm64"},{"runner":"macos-13","arch":"x64"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"runner":"macos-14","arch":"arm64"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"runner":"macos-15","arch":"arm64"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -99,6 +104,14 @@ jobs:
 
       - name: Verify PySide6 import
         run: python3 -c "import PySide6; from PySide6.QtCore import qVersion; print('PySide6 OK, Qt', qVersion())"
+
+      - name: Show PySide6/Qt native library architecture (섹션 13)
+        run: |
+          PYSIDE_DIR="$(python3 -c 'import os, PySide6; print(os.path.dirname(PySide6.__file__))')"
+          echo "PySide6 dir: $PYSIDE_DIR"
+          for f in "$PYSIDE_DIR"/QtCore*.so "$PYSIDE_DIR"/libpyside6*.dylib "$PYSIDE_DIR"/../shiboken6/libshiboken6*.dylib; do
+            [ -e "$f" ] && file "$f"
+          done
 
       - name: Verify UPCON module import + macOS platform selection
         run: |
