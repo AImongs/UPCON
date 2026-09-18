@@ -13,7 +13,7 @@ from upcon.core.config import AppConfig
 from upcon.core.constants import OutputMode, ProcessMode
 from upcon.core.env import GpuInfo, GpuVendor, SystemEnv, detect_system_env
 from upcon.core.errors import UpconError
-from upcon.core.jobs import CancelledError, Job, Phase
+from upcon.core.jobs import CancelledError, CancelToken, Job, Phase
 from upcon.core.probe import probe_video
 from upcon.core.router import Router
 from upcon.providers.local_ncnn import LocalNcnnProvider
@@ -305,3 +305,79 @@ def test_unwritable_output_dir_fails_fast(cfg, env, tmp_path, sample_480p):
     with pytest.raises(UpconError) as ei:
         LocalNcnnProvider(cfg).upscale(job, lambda p: None, env)
     assert "쓸 수 없습니다" in ei.value.user_message and time.time() - t0 < 5
+
+
+# ---------------------------------------------------------------- HOTFIX: 결과 영상 디코드 검증
+# (RTX 4060 Ti 리포트 — "작업은 완료된 것처럼 보이지만 재생하면 소리만 나오고 화면이 안 나온다")
+# 원인이 코드에서 확정되지 않아 인코더 설정은 바꾸지 않고, ffprobe(컨테이너 메타데이터)만으로는
+# 못 잡는 "태그는 정상인데 실제 비트스트림이 깨진" 결과를 실제 디코드로 잡아내는 안전망을 검증한다.
+
+def test_verify_video_decodable_passes_on_valid_output(sample_480p):
+    ff.verify_video_decodable(sample_480p)  # 예외 없이 통과해야 한다
+
+
+def test_verify_video_decodable_fails_on_garbage_bytes(tmp_path):
+    """(D) 깨진/의미없는 바이트 → 컨테이너조차 못 읽으므로 decode 검증도 실패해야 한다."""
+    bad = tmp_path / "garbage.mp4"
+    bad.write_bytes(b"not a real mp4 file" * 200)
+    with pytest.raises(UpconError):
+        ff.verify_video_decodable(bad)
+
+
+def test_verify_video_decodable_fails_on_zero_byte_file(tmp_path):
+    """(D) 0바이트 결과 파일."""
+    empty = tmp_path / "empty.mp4"
+    empty.write_bytes(b"")
+    with pytest.raises(UpconError):
+        ff.verify_video_decodable(empty)
+
+
+def test_verify_output_rejects_audio_only_result(tmp_path, sample_480p, ffmpeg_bin):
+    """(C) 비디오 스트림이 없는 결과(음성만 있는 MP4) → _verify_output 이 실패해야 한다.
+    (probe_video 가 '영상 트랙 없음'으로 먼저 걸러낸다 — 이 체크는 이번 HOTFIX 이전부터 있었다.)"""
+    import subprocess
+    audio_only = tmp_path / "audio_only.mp4"
+    subprocess.run([str(ffmpeg_bin), "-v", "error", "-y", "-i", str(sample_480p),
+                    "-vn", "-c:a", "aac", str(audio_only)], check=True)
+    with pytest.raises(UpconError):
+        LocalNcnnProvider._verify_output(audio_only, 854, 480, None)
+
+
+def test_verify_output_catches_header_ok_but_bitstream_corrupt(tmp_path, sample_480p):
+    """헤더/메타데이터(ffprobe 기준)는 정상으로 보이지만 실제 프레임 데이터가 잘려 디코드가
+    실패하는 결과를 재현한다 — RTX 4060 Ti 리포트와 같은 '겉보기엔 정상' 패턴.
+    +faststart 로 moov 를 앞에 둔 뒤 뒷부분(프레임 데이터) 대부분을 잘라내면, ffprobe 는
+    스트림 정보를 여전히 읽지만(container 헤더는 앞쪽에 있으므로) 실제 디코드는 중간에 깨진다."""
+    good = tmp_path / "good.mp4"
+    info = probe_video(sample_480p)
+    ff.run_plain_resize(sample_480p, good, info, 854, 480, crf=23, preset="veryfast",
+                        encoder="libx264", cancel=CancelToken(), on_frame=lambda n: None)
+    data = good.read_bytes()
+    corrupt = tmp_path / "corrupt.mp4"
+    corrupt.write_bytes(data[: len(data) // 3])
+    out = probe_video(corrupt)                          # 컨테이너 메타데이터는 여전히 읽힌다
+    assert out.width > 0 and out.height > 0
+    with pytest.raises(UpconError):
+        ff.verify_video_decodable(corrupt)               # 하지만 실제 디코드는 실패해야 한다
+    with pytest.raises(UpconError):
+        LocalNcnnProvider._verify_output(corrupt, out.width, out.height, None)
+
+
+def test_plain_resize_transcodes_pcm_audio_to_aac(tmp_path, ffmpeg_bin):
+    """(G) MOV + PCM 오디오 입력 → 최종 MP4 의 video/audio 가 모두 정상이어야 한다
+    (PCM 은 MP4 컨테이너에 그대로 못 넣으므로 AAC 트랜스코드 분기를 타는지 확인)."""
+    import subprocess as sp
+    src = tmp_path / "pcm_src.mov"
+    sp.run([str(ffmpeg_bin), "-v", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+            "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", "-shortest",
+            str(src)], check=True)
+    info = probe_video(src)
+    assert info.audio_codec == "pcm_s16le"
+    out = tmp_path / "pcm_out.mp4"
+    ff.run_plain_resize(src, out, info, 320, 240, crf=23, preset="veryfast",
+                        encoder="libx264", cancel=CancelToken(), on_frame=lambda n: None)
+    o = probe_video(out)
+    assert o.has_audio and o.audio_codec == "aac"
+    ff.verify_video_decodable(out)

@@ -232,11 +232,15 @@ class LocalNcnnProvider(UpscalerProvider):
             try:
                 frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
                                                  progress, enc_name, resize_target)
+                progress(Progress(Phase.SAVE, frames_done, frames_done))
+                self._verify_output(output, target_w, target_h, info, enc_name)
             except UpconError as e:
                 if enc_name == "libx264" or "encoder" not in (e.detail or "").lower():
                     raise
-                # 하드웨어 인코더(NVENC/AMF/QSV)가 죽은 경우 → CPU 인코더로 자동 재시도
-                log.warning("hardware encoder %s failed (%s) → retrying with libx264", enc_name, e.detail[:200])
+                # 하드웨어 인코더(NVENC/AMF/QSV)가 죽었거나, exit 0 인데 결과 비디오 스트림이
+                # 깨진 경우(디코드 검증 실패, RTX 4060 Ti 리포트) → CPU 인코더로 1회 자동 재시도
+                log.warning("hardware encoder %s failed or produced unusable output (%s) → retrying with libx264",
+                           enc_name, (e.detail or "")[:200])
                 tempfs.cleanup_dir(job_dir)
                 job_dir = tempfs.new_job_dir(temp_root)
                 if output.exists():
@@ -244,8 +248,8 @@ class LocalNcnnProvider(UpscalerProvider):
                 progress(Progress(Phase.PREPARE, 0, info.nb_frames, "인코더를 바꿔 다시 시작합니다"))
                 frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
                                                  progress, "libx264", resize_target)
-            progress(Progress(Phase.SAVE, frames_done, frames_done))
-            self._verify_output(output, target_w, target_h, info)
+                progress(Progress(Phase.SAVE, frames_done, frames_done))
+                self._verify_output(output, target_w, target_h, info, "libx264")
         except BaseException:
             ff_out = output
             if ff_out.exists():
@@ -258,10 +262,11 @@ class LocalNcnnProvider(UpscalerProvider):
             tempfs.cleanup_dir(job_dir)
 
         dt = time.time() - t0
-        log.info("upscale done: gpu=%s model=%s src=%s %dx%d %.3ffps %.1fs frames=%d → %s %dx%d | %.1fs (%.2f fps, %.2fx realtime)",
-                 gpu.name, self.spec.id, info.path.name, info.width, info.height, info.fps, info.duration_sec,
-                 frames_done, output.name, target_w, target_h, dt, frames_done / dt if dt else 0,
-                 (info.duration_sec / dt) if dt else 0)
+        log.info("upscale done: gpu=%s (driver %s) model=%s src=%s %dx%d %.3ffps %.1fs frames=%d → %s %dx%d | "
+                 "%.1fs (%.2f fps, %.2fx realtime)",
+                 gpu.name, gpu.driver_version or "?", self.spec.id, info.path.name, info.width, info.height,
+                 info.fps, info.duration_sec, frames_done, output.name, target_w, target_h, dt,
+                 frames_done / dt if dt else 0, (info.duration_sec / dt) if dt else 0)
         return output
 
     def _plain_resize_job(self, info: VideoInfo, output: Path, target_w: int, target_h: int,
@@ -281,18 +286,20 @@ class LocalNcnnProvider(UpscalerProvider):
             try:
                 ff.run_plain_resize(info.path, output, info, target_w, target_h,
                                     self.config.output_crf, self.config.output_preset, enc_name, cancel, on_frame)
+                progress(Progress(Phase.SAVE, last[0], last[0]))
+                self._verify_output(output, target_w, target_h, info, enc_name)
             except UpconError as e:
                 if enc_name == "libx264" or "encoder" not in (e.detail or "").lower():
                     raise
-                log.warning("hardware encoder %s failed in plain resize (%s) → retrying with libx264",
-                           enc_name, e.detail[:200])
+                log.warning("hardware encoder %s failed or produced unusable output in plain resize (%s) → "
+                           "retrying with libx264", enc_name, (e.detail or "")[:200])
                 if output.exists():
                     output.unlink()
                 progress(Progress(Phase.PREPARE, 0, info.nb_frames, "인코더를 바꿔 다시 시작합니다"))
                 ff.run_plain_resize(info.path, output, info, target_w, target_h,
                                     self.config.output_crf, self.config.output_preset, "libx264", cancel, on_frame)
-            progress(Progress(Phase.SAVE, last[0], last[0]))
-            self._verify_output(output, target_w, target_h, info)
+                progress(Progress(Phase.SAVE, last[0], last[0]))
+                self._verify_output(output, target_w, target_h, info, "libx264")
         except BaseException:
             if output.exists():
                 try:
@@ -455,9 +462,17 @@ class LocalNcnnProvider(UpscalerProvider):
             raise UpconError(self._explain_ncnn_failure(err), f"ncnn rc={p.returncode}: {err[-600:]}")
 
     @staticmethod
-    def _verify_output(output: Path, target_w: int, target_h: int, info: VideoInfo | None = None) -> None:
+    def _verify_output(output: Path, target_w: int, target_h: int, info: VideoInfo | None = None,
+                       enc_name: str = "") -> None:
         """결과가 정확히 target_w×target_h 인지 확인한다 (2× 든 1080p/4K 든 항상 정확히 일치해야
-        한다 — 예전의 '입력의 배수인가' 근사 체크는 1080p/4K 처럼 배수가 아닌 목표에는 맞지 않는다)."""
+        한다 — 예전의 '입력의 배수인가' 근사 체크는 1080p/4K 처럼 배수가 아닌 목표에는 맞지 않는다).
+
+        ffprobe 로 컨테이너 메타데이터(해상도/오디오 존재)를 확인한 뒤, 마지막에 실제로
+        영상을 처음부터 끝까지 디코드해 본다(ff.verify_video_decodable) — '작업은 완료된
+        것처럼 보이지만 재생하면 소리만 나오고 화면이 안 나오는' 손상된 비디오 스트림은
+        ffprobe 만으로는 못 잡기 때문이다(RTX 4060 Ti 리포트). 이 디코드 검증 실패는
+        detail 에 'encoder' 를 포함해, 호출부의 NVENC/AMF/QSV → libx264 1회 재시도
+        로직을 그대로 함께 쓴다."""
         if not output.exists() or output.stat().st_size == 0:
             raise UpconError("결과 파일이 만들어지지 않았습니다.", "output missing")
         out = probe_video(output)
@@ -469,8 +484,10 @@ class LocalNcnnProvider(UpscalerProvider):
                 raise UpconError("결과 영상에 오디오가 들어가지 않았습니다.", "audio missing in output")
             if abs(out.duration_sec - info.duration_sec) > max(1.0, info.duration_sec * 0.02):
                 log.warning("duration differs: src %.2fs out %.2fs", info.duration_sec, out.duration_sec)
-        log.info("output verified: %s %dx%d %.3ffps %.2fs audio=%s size=%s",
-                 output.name, out.width, out.height, out.fps, out.duration_sec, out.has_audio, out.size_text)
+        ff.verify_video_decodable(output)
+        log.info("output verified: %s %dx%d %.3ffps %.2fs codec=%s audio=%s encoder=%s size=%s",
+                 output.name, out.width, out.height, out.fps, out.duration_sec, out.video_codec,
+                 out.has_audio, enc_name or "?", out.size_text)
 
 
 # ---------------------------------------------------------------------- 보조

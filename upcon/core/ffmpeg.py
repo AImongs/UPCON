@@ -25,6 +25,13 @@ CREATE_NO_WINDOW = _plat.NO_WINDOW_FLAGS
 _MP4_AUDIO_COPY_OK = {"aac", "mp3", "ac3", "eac3", "alac", "opus"}
 
 
+def _scrub_cmd(cmd: list[str], *paths: Path) -> str:
+    """로그용 명령어 문자열. 실제 인코드/디코드에는 전체 경로를 그대로 쓰지만,
+    로그에는 src/dst 등 넘겨받은 경로만 파일명으로 줄인다(수강생 PC의 폴더 구조/사용자명 노출 방지)."""
+    names = {str(p): p.name for p in paths}
+    return " ".join(names.get(a, a) for a in cmd)
+
+
 def resolve_output_dir(src: Path, output_dir: Path | None) -> Path:
     """설정된 출력 폴더가 없거나 만들 수 없으면 원본 폴더로 되돌린다 (경고 로그)."""
     if output_dir:
@@ -88,7 +95,7 @@ def start_frame_decoder(src: Path, fps: str) -> subprocess.Popen:
            "-map", "0:v:0", "-an", "-sn", "-dn",
            "-fps_mode", "cfr", "-r", fps,
            "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
-    log.debug("decoder: %s", " ".join(cmd))
+    log.info("decoder cmd: %s", _scrub_cmd(cmd, src))
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             bufsize=0, creationflags=CREATE_NO_WINDOW)
 
@@ -163,7 +170,7 @@ def start_encoder(dst: Path, src_for_audio: Path, info: VideoInfo, fps: str,
         cmd += ["-vf", f"scale={resize[0]}:{resize[1]}:flags=lanczos"]
     cmd += _video_codec_args(encoder, crf, preset)
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)]
-    log.debug("encoder: %s", " ".join(cmd))
+    log.info("encoder cmd: %s", _scrub_cmd(cmd, dst, src_for_audio))
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             creationflags=CREATE_NO_WINDOW)
 
@@ -186,7 +193,7 @@ def run_plain_resize(src: Path, dst: Path, info: VideoInfo, target_w: int, targe
     cmd += _video_codec_args(encoder, crf, preset)
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart",
             "-progress", "pipe:1", "-nostats", str(dst)]
-    log.debug("plain resize: %s", " ".join(cmd))
+    log.info("plain resize cmd: %s", _scrub_cmd(cmd, src, dst))
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          text=True, encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW)
     try:
@@ -240,6 +247,27 @@ def kill_process(p: subprocess.Popen | None) -> None:
         p.wait(timeout=5)
     except Exception:
         pass
+
+
+def verify_video_decodable(path: Path, timeout: int = 600) -> None:
+    """결과 영상을 실제로 처음부터 끝까지 디코드해 본다 (출력 없이 -f null).
+
+    ffprobe(-show_streams)는 컨테이너/스트림 헤더만 읽으므로, '태그는 h264인데 실제
+    비트스트림이 깨져서 일부 플레이어가 화면 없이 소리만 재생하는' 경우를 잡아내지 못한다
+    (RTX 4060 Ti 리포트 대응). -v error 라 실제 디코드 오류가 있을 때만 stderr 에 무언가
+    남는다 — 이 코드베이스의 다른 ffmpeg 호출(디코더 등)과 같은 기준."""
+    cmd = [str(ffmpeg_path()), "-v", "error", "-nostdin", "-i", str(path),
+           "-map", "0:v:0", "-f", "null", "-"]
+    log.info("decode check cmd: %s", _scrub_cmd(cmd, path))
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=CREATE_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        raise UpconError("결과 영상을 확인하는 데 시간이 너무 오래 걸립니다.",
+                         "decode check timeout (encoder output)")
+    if r.returncode != 0 or r.stderr:
+        stderr = (r.stderr or b"").decode("utf-8", "replace")
+        raise UpconError("결과 영상의 비디오 스트림을 확인할 수 없습니다.",
+                         f"decode check failed (encoder output) rc={r.returncode}: {stderr[-800:]}")
 
 
 def check_encoder_exit(p: subprocess.Popen, dst: Path) -> None:
