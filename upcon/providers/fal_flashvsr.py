@@ -38,6 +38,30 @@ ENDPOINT = "fal-ai/flashvsr/upscale/video"
 UPLOAD_EXPIRES = "1d"          # 업로드한 원본은 하루 뒤 CDN 에서 자동 삭제 (개인정보 최소화)
 POLL_INTERVAL = 2.0
 MAX_WAIT_SEC = 3 * 3600
+MAX_TRANSIENT_RETRIES = 5      # 폴링/결과조회 일시적 네트워크 오류 재시도 횟수 (같은 request_id 재조회, 재-submit 없음)
+
+
+def _with_transient_retry(fn, what: str, cancel):
+    """일시적 네트워크 오류만 같은 request(=fn 이 호출하는 handle.status/get)로 재시도한다.
+
+    submit(과금 요청)은 이 함수를 쓰지 않는다 — 여기서 재시도하는 건 이미 접수된 요청의 상태/결과를
+    다시 조회하는 것뿐이라 재시도해도 새 과금이 생기지 않는다. 네트워크가 아닌 오류(인증/잔액/서버가
+    명시적으로 돌려준 오류 등)는 재시도하지 않고 바로 올린다.
+    """
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            err = explain_fal_error(e)
+            attempt += 1
+            if not isinstance(err, FalNetworkError) or attempt > MAX_TRANSIENT_RETRIES:
+                raise err
+            wait = min(2 ** attempt, 30)
+            log.warning("fal %s 일시적 오류 (%d/%d회), 같은 요청으로 %d초 후 재조회: %s",
+                       what, attempt, MAX_TRANSIENT_RETRIES, wait, err.detail)
+            cancel.raise_if_cancelled()
+            time.sleep(wait)
 
 
 class FalFlashVSRProvider(UpscalerProvider):
@@ -144,10 +168,7 @@ class FalFlashVSRProvider(UpscalerProvider):
                 if cancel.cancelled:
                     self._try_cancel(handle, job)
                     raise CancelledError()
-                try:
-                    st = handle.status(with_logs=False)
-                except Exception as e:  # noqa: BLE001
-                    raise explain_fal_error(e)
+                st = _with_transient_retry(lambda: handle.status(with_logs=False), "상태 조회", cancel)
                 if isinstance(st, Queued):
                     progress(Progress(Phase.QUEUE, detail=f"대기열 {st.position + 1}번째 · {int(time.time() - t_q)}초 경과"))
                 elif isinstance(st, InProgress):
@@ -165,11 +186,8 @@ class FalFlashVSRProvider(UpscalerProvider):
             if isinstance(st, Completed):
                 inference_time = (st.metrics or {}).get("inference_time")
 
-            # 4) 결과
-            try:
-                result = handle.get()
-            except Exception as e:  # noqa: BLE001
-                raise explain_fal_error(e)
+            # 4) 결과 (처리는 이미 끝났음 — 결과 조회 재시도도 새 과금과 무관)
+            result = _with_transient_retry(lambda: handle.get(), "결과 조회", cancel)
             video = (result or {}).get("video") or {}
             url = video.get("url")
             if not url:

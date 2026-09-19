@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
+import time
 from pathlib import Path
 
 import httpx
 import keyring
 import pytest
-from fal_client.client import FalClientHTTPError, FalClientTimeoutError
+from fal_client.client import Completed, FalClientHTTPError, FalClientTimeoutError, InProgress, Queued
 
 from upcon.core import credentials, pricing
 from upcon.core.config import AppConfig
 from upcon.core.constants import ProcessMode
 from upcon.core.env import SystemEnv
+from upcon.core.jobs import CancelledError, Job, JobManager, JobStatus, Phase
 from upcon.core.logging_setup import mask_sensitive
-from upcon.core.probe import VideoInfo
+from upcon.core.probe import VideoInfo, probe_video
 from upcon.core.router import Router
 from upcon.providers.fal_base import FalAuthError, FalBalanceError, FalNetworkError, explain_fal_error
 from upcon.providers.fal_flashvsr import ENDPOINT, FalFlashVSRProvider
@@ -260,6 +263,276 @@ def test_provider_submit_transport_failure_message_warns_about_possible_request(
     assert "확인" in msg
     # 실패했으므로 결과 파일이 남지 않아야 한다
     assert not (tmp_path / "clip_2x.mp4").exists()
+
+
+def test_upscale_without_key_raises_auth_error(monkeypatch, tmp_path):
+    """API Key 없음 → 업로드/submit 시도 전에 즉시 안내 오류로 끝나야 한다."""
+    import upcon.providers.fal_base as fb
+    monkeypatch.setattr(fb.credentials, "get_fal_key", lambda: None)
+    cfg = AppConfig()
+    cfg.temp_dir = str(tmp_path / "tmp")
+    src = tmp_path / "a.mp4"
+    src.write_bytes(b"x")
+    info = VideoInfo(path=src, width=854, height=480, fps=24, duration_sec=5, size_bytes=1024,
+                     video_codec="h264", has_audio=True, nb_frames=120)
+    job = Job(input_path=src, scale=2, info=info)
+    with pytest.raises(FalAuthError):
+        FalFlashVSRProvider(cfg).upscale(job, lambda _p: None)
+
+
+# ------------------------------------------------------- 실제 fal.ai 없이 전체 흐름을 끝까지 돌리는 가짜 클라우드
+class _FakeHandle:
+    """실제 fal_client.SyncRequestHandle 대신 쓰는 가짜 핸들. statuses 를 순서대로 돌려준다
+    (예외를 넣으면 그 예외가 status()/get() 호출 시 그대로 발생) — 같은 request_id 를 계속 조회하는지,
+    새 submit 없이 재시도하는지 검증하는 데 쓴다."""
+
+    def __init__(self, request_id: str, statuses: list, result: dict):
+        self.request_id = request_id
+        self.response_url = self.status_url = self.cancel_url = ""
+        self._statuses = list(statuses)
+        self._result = result
+        self.status_calls = 0
+        self.cancel_calls = 0
+
+    def status(self, with_logs: bool = False):
+        self.status_calls += 1
+        item = self._statuses.pop(0) if self._statuses else Completed(logs=[], metrics={}, error=None, error_type=None)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def get(self):
+        return self._result
+
+    def cancel(self):
+        self.cancel_calls += 1
+
+
+class _FakeUploadClient:
+    def __init__(self, url: str = "https://cdn.example/uploaded.mp4"):
+        self.url = url
+        self.upload_calls = 0
+
+    def upload_file(self, path, lifecycle=None):
+        self.upload_calls += 1
+        return self.url
+
+
+class _FakeStreamResp:
+    def __init__(self, data: bytes):
+        self._data = data
+        self.headers = {"content-length": str(len(data))}
+
+    def raise_for_status(self):
+        pass
+
+    def iter_bytes(self, n):
+        for i in range(0, len(self._data), n):
+            yield self._data[i:i + n]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _rig_cloud(monkeypatch, result_bytes: bytes, handle_factory):
+    """FalFlashVSRProvider.upscale() 을 실제 네트워크 없이 끝까지 돌릴 수 있게 세팅한다.
+
+    handle_factory(attempt: int) -> _FakeHandle  (attempt 는 1부터, submit_once 호출 순서)
+    반환: (fake upload client, submit 호출 인자 리스트, 만들어진 handle 리스트)
+    """
+    import upcon.providers.fal_base as fb
+    import upcon.providers.fal_flashvsr as fvm
+    monkeypatch.setattr(fvm.time, "sleep", lambda s: None)          # 폴링/백오프 대기 생략 (테스트 속도)
+    monkeypatch.setattr(fb.credentials, "get_fal_key", lambda: FAKE_KEY)
+    monkeypatch.setattr(fvm.FalApi, "actual_cost_usd", lambda self, rid, ep: None)   # 실제 청구 조회 안 함(무관)
+    upload = _FakeUploadClient()
+    monkeypatch.setattr(fvm.FalApi, "client", lambda self: upload)
+
+    submit_calls: list[dict] = []
+    handles: list[_FakeHandle] = []
+
+    def fake_submit_once(self, client, endpoint, arguments, headers=None):
+        submit_calls.append(dict(arguments))
+        h = handle_factory(len(submit_calls))
+        handles.append(h)
+        return h
+    monkeypatch.setattr(fvm.FalApi, "submit_once", fake_submit_once)
+
+    class _FakeHttpxClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def stream(self, method, url, **kw):
+            return _FakeStreamResp(result_bytes)
+
+    monkeypatch.setattr(fvm.httpx, "Client", _FakeHttpxClient)
+    return upload, submit_calls, handles
+
+
+def _completed(metrics=None, error=None, error_type=None):
+    return Completed(logs=[], metrics=metrics or {}, error=error, error_type=error_type)
+
+
+def _wait(cond, timeout=10.0):
+    t0 = time.time()
+    while not cond():
+        if time.time() - t0 > timeout:
+            raise AssertionError("timeout")
+        time.sleep(0.02)
+
+
+def test_cloud_upscale_full_flow_upload_poll_download_succeeds(monkeypatch, tmp_path, sample_480p):
+    """업로드 → submit(1회) → 대기열/처리 폴링 → 결과 다운로드 → 오디오 검증 → 저장까지 전체 경로."""
+    cfg = AppConfig()
+    cfg.output_dir = str(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    result_bytes = sample_480p.read_bytes()
+
+    def factory(attempt):
+        return _FakeHandle(f"req-{attempt}",
+                           [Queued(position=2), Queued(position=0), InProgress(logs=[]), _completed(metrics={"inference_time": 3.2})],
+                           {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+
+    upload, submit_calls, handles = _rig_cloud(monkeypatch, result_bytes, factory)
+    provider = FalFlashVSRProvider(cfg)
+    info = probe_video(sample_480p)
+    job = Job(input_path=sample_480p, scale=2, info=info)
+    phases = []
+    out = provider.upscale(job, lambda p: phases.append(p.phase), None)
+
+    assert upload.upload_calls == 1
+    assert len(submit_calls) == 1 and submit_calls[0]["upscale_factor"] == 2
+    assert out.exists() and out.parent == Path(cfg.output_dir)
+    assert {Phase.UPLOAD, Phase.QUEUE, Phase.CLOUD, Phase.DOWNLOAD, Phase.SAVE}.issubset(set(phases))
+    assert job.estimated_cost_usd is not None
+
+
+def test_cloud_polling_transient_network_failure_recovers_without_resubmit(monkeypatch, tmp_path, sample_480p):
+    """폴링 중 일시적 네트워크 오류가 나도 같은 request_id 를 다시 조회할 뿐, 새 submit(재과금)은 없어야 한다."""
+    cfg = AppConfig()
+    cfg.output_dir = str(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    result_bytes = sample_480p.read_bytes()
+
+    def factory(attempt):
+        return _FakeHandle(f"req-{attempt}", [
+            Queued(position=0),
+            httpx.ConnectError("network blip"),
+            httpx.ConnectError("network blip"),
+            InProgress(logs=[]),
+            _completed(),
+        ], {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+
+    upload, submit_calls, handles = _rig_cloud(monkeypatch, result_bytes, factory)
+    provider = FalFlashVSRProvider(cfg)
+    info = probe_video(sample_480p)
+    job = Job(input_path=sample_480p, scale=2, info=info)
+    out = provider.upscale(job, lambda _p: None, None)
+
+    assert out.exists()
+    assert len(submit_calls) == 1, "폴링이 일시적으로 실패해도 새 submit(재과금)이 없어야 한다"
+    assert handles[0].status_calls >= 5   # Queued + 실패 2회(같은 요청 재조회) + InProgress + Completed
+
+
+def test_cloud_cancel_during_queue_no_resubmit_and_no_output_file(monkeypatch, tmp_path, sample_480p):
+    cfg = AppConfig()
+    cfg.output_dir = str(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    result_bytes = sample_480p.read_bytes()
+
+    def factory(attempt):
+        return _FakeHandle(f"req-{attempt}", [Queued(position=3), Queued(position=1)],
+                           {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+
+    upload, submit_calls, handles = _rig_cloud(monkeypatch, result_bytes, factory)
+    provider = FalFlashVSRProvider(cfg)
+    info = probe_video(sample_480p)
+    job = Job(input_path=sample_480p, scale=2, info=info)
+
+    def cb(p):
+        if p.phase == Phase.QUEUE:
+            job.cancel.cancel()
+
+    with pytest.raises(CancelledError):
+        provider.upscale(job, cb, None)
+    assert len(submit_calls) == 1
+    assert handles[0].cancel_calls == 1
+    assert not list(Path(cfg.output_dir).glob("*.mp4"))
+
+
+def test_cloud_retry_after_failure_makes_exactly_one_new_submit(monkeypatch, tmp_path, sample_480p):
+    """실패한 작업을 '다시 시도' 하면 새 요청이 1건만 더 생겨야 한다 (기존 실패 요청을 중복 제출하지 않음)."""
+    cfg = AppConfig()
+    cfg.output_dir = str(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    result_bytes = sample_480p.read_bytes()
+
+    def factory(attempt):
+        if attempt == 1:
+            return _FakeHandle("req-1", [_completed(error="server exploded", error_type="InternalError")],
+                               {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+        return _FakeHandle(f"req-{attempt}", [_completed()],
+                           {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+
+    upload, submit_calls, handles = _rig_cloud(monkeypatch, result_bytes, factory)
+    provider = FalFlashVSRProvider(cfg)
+    info = probe_video(sample_480p)
+    job = Job(input_path=sample_480p, scale=2, info=info, provider_id=provider.id)
+
+    events = []
+    m = JobManager(lambda j, cb: provider.upscale(j, cb, None), lambda j: None, events.append)
+    m.add(job)
+    m.start()
+    _wait(lambda: "finished" in events)
+    assert job.status == JobStatus.FAILED and len(submit_calls) == 1
+
+    assert m.retry_failed() == 1
+    events.clear()
+    m.start()
+    _wait(lambda: "finished" in events)
+    assert job.status == JobStatus.DONE and len(submit_calls) == 2
+    m.shutdown()
+
+
+def test_cloud_batch_two_files_first_fails_second_continues(monkeypatch, tmp_path, sample_480p):
+    cfg = AppConfig()
+    cfg.output_dir = str(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    result_bytes = sample_480p.read_bytes()
+
+    def factory(attempt):
+        if attempt == 1:
+            return _FakeHandle("req-1", [_completed(error="broken input", error_type="ValidationError")],
+                               {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+        return _FakeHandle(f"req-{attempt}", [Queued(position=0), _completed()],
+                           {"video": {"url": "https://cdn.example/result.mp4", "file_size": len(result_bytes)}})
+
+    upload, submit_calls, handles = _rig_cloud(monkeypatch, result_bytes, factory)
+    provider = FalFlashVSRProvider(cfg)
+    src1, src2 = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    shutil.copy(sample_480p, src1)
+    shutil.copy(sample_480p, src2)
+    job1 = Job(input_path=src1, scale=2, info=probe_video(src1), provider_id=provider.id)
+    job2 = Job(input_path=src2, scale=2, info=probe_video(src2), provider_id=provider.id)
+
+    events = []
+    m = JobManager(lambda j, cb: provider.upscale(j, cb, None), lambda j: None, events.append)
+    m.add(job1)
+    m.add(job2)
+    m.start()
+    _wait(lambda: "finished" in events, timeout=20)
+    assert job1.status == JobStatus.FAILED and job2.status == JobStatus.DONE
+    assert len(submit_calls) == 2          # 파일마다 정확히 1회 (첫 실패가 둘째 파일에 영향 없음)
+    m.shutdown()
 
 
 def test_connection_test_reports_locked_account_before_upload(monkeypatch):

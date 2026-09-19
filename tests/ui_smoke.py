@@ -33,6 +33,7 @@ from upcon import APP_NAME, APP_VERSION  # noqa: E402
 from upcon.__main__ import create_app  # noqa: E402
 from upcon.app.about_dialog import AboutDialog, NoticesDialog  # noqa: E402
 from upcon.app.cloud_settings import CloudSettingsDialog  # noqa: E402
+from upcon.app.widgets.cloud_confirm_dialog import CloudConfirmDialog  # noqa: E402
 from upcon.core import credentials  # noqa: E402
 from upcon.core import ffmpeg as ff  # noqa: E402
 from upcon.core.constants import ProcessMode  # noqa: E402
@@ -103,6 +104,10 @@ def main() -> int:
             elif isinstance(w, CloudSettingsDialog) and w.isVisible():
                 shot(w, "12_cloud_settings")
                 captured.append("settings-dialog")
+                w.reject()
+            elif isinstance(w, CloudConfirmDialog) and w.isVisible():
+                shot(w, "11b_cloud_confirm")
+                captured.append(w.total_label.text())
                 w.reject()
             elif isinstance(w, AboutDialog) and w.isVisible():
                 shot(w, "13_about")

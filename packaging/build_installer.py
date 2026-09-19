@@ -10,6 +10,7 @@ r"""UPCON Windows Installer 빌드 (Inno Setup 6).
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,13 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--diag", action="store_true",
+                     help="HOTFIX-2 진단용 빌드(libx264 강제 launcher 포함, 파일명에 _DIAG 접미사). "
+                          "일반 배포본에는 영향 없음 — upcon.iss 의 #ifdef DIAGBUILD 로 완전히 분리됨.")
+    args = ap.parse_args()
+
     from upcon.version import __version__
 
     dist = ROOT / "dist" / "UPCON"
@@ -59,13 +67,18 @@ def main() -> int:
 
     from upcon.version import COPYRIGHT
     cmd = [str(find_iscc()), f"/DMyAppVersion={__version__}",
-           f"/DMyAppCopyright={COPYRIGHT}", str(iss)]
+           f"/DMyAppCopyright={COPYRIGHT}"]
+    if args.diag:
+        cmd.append("/DDIAGBUILD=1")
+        print("  모드      : HOTFIX-2 진단 빌드 (libx264 강제 launcher 포함)")
+    cmd.append(str(iss))
     print("  ISCC      :", " ".join(cmd))
     r = subprocess.run(cmd, cwd=str(ROOT / "packaging"))
     if r.returncode != 0:
         return r.returncode
 
-    produced = out_dir / f"UPCON_Setup_{__version__}.exe"
+    suffix = "_DIAG" if args.diag else ""
+    produced = out_dir / f"UPCON_Setup_{__version__}{suffix}.exe"
     if produced.is_file():
         mb = produced.stat().st_size / 1048576
         print(f"\n완료: {produced}  ({mb:,.1f} MB)")

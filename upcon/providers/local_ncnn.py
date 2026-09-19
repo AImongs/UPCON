@@ -24,6 +24,7 @@ import logging
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -46,6 +47,82 @@ from upcon.providers.base import Availability, Estimate, UpscalerProvider
 
 log = logging.getLogger(__name__)
 _DONE_RE = re.compile(r" done\s*$")
+
+# HOTFIX-2 진단 전용: 이 환경변수에 폴더 경로를 지정하면 Real-ESRGAN 이 만든 첫/중간/마지막
+# 프레임 PNG 를 최대 3장만 저장한다 — "AI 프레임 자체가 깨졌는가" vs "인코더 단계에서
+# 깨지는가" 를 구분하기 위함. 미설정(기본값)이면 아무것도 저장하지 않는다. 전체 프레임을
+# 저장하지 않으므로 디스크 폭증이 없다.
+_DEBUG_FRAME_DIR_ENV = "UPCON_DEBUG_SAVE_FRAMES_DIR"
+
+
+def _debug_frame_dir() -> Path | None:
+    d = os.environ.get(_DEBUG_FRAME_DIR_ENV, "").strip()
+    if not d:
+        return None
+    p = Path(d)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+class _DebugFrameSaver:
+    """HOTFIX-2 진단: ncnn 이 실제로 만들어 낸 PNG 목록만 근거로 first/middle/last 를 저장한다.
+
+    이전 버전은 info.nb_frames(컨테이너 메타데이터 기반 추정치, 실제와 다를 수 있음)로
+    미리 절대 프레임 인덱스를 계산해 두고 그 인덱스와 정확히 일치하는 청크에서만 복사했다.
+    추정치가 실제 디코드된 프레임 수보다 크면 middle/last 목표 인덱스가 어떤 청크에도 걸리지
+    않아 조용히 저장되지 않을 수 있었다("폴더는 생기는데 PNG 가 0장" 리포트의 유력한 원인 중
+    하나) — 이번엔 실제 청크 결과에서만 판단한다:
+      - first: 실제로 만들어진 첫 번째 청크의 첫 PNG (항상 보장 — 조건 없음)
+      - last : 매 청크마다 그 청크의 마지막 PNG로 계속 덮어쓴다. 마지막 청크까지 끝나면
+               자연히 진짜 마지막 프레임이 남는다(추정치가 완전히 틀려도 항상 맞다)
+      - middle: 지금까지 실제로 처리한 프레임 수가 추정 total 의 절반을 넘는 첫 청크에서
+                저장(근사치면 충분 — 육안 확인용 진단이지 정밀 지표가 아니다)
+    파일명은 라벨 고정(frame_first.png 등)이라 몇 청크가 오든 디스크에는 항상 최대 3개
+    파일만 존재한다("최대 3장" 이 코드가 아니라 설계로 보장됨)."""
+
+    def __init__(self, debug_dir: Path, approx_total: int):
+        self.debug_dir = debug_dir
+        self.approx_total = max(approx_total, 0)
+        self._first_done = False
+        self._middle_done = False
+        self._frames_seen = 0
+        self.saved_labels: set[str] = set()
+
+    def on_chunk(self, produced: list[Path]) -> None:
+        log.debug("diagnostic: chunk produced %d PNG(s)%s", len(produced),
+                  f" (first={produced[0].name}, last={produced[-1].name})" if produced else "")
+        if not produced:
+            return
+        if not self._first_done:
+            self._save(produced[0], "first")
+            self._first_done = True
+        self._frames_seen += len(produced)
+        if not self._middle_done and self._frames_seen >= max(self.approx_total // 2, 1):
+            self._save(produced[len(produced) // 2], "middle")
+            self._middle_done = True
+        self._save(produced[-1], "last")     # 매 청크마다 갱신 -> 끝나면 실제 마지막 프레임
+
+    def _save(self, src: Path, label: str) -> None:
+        dst = self.debug_dir / f"frame_{label}.png"
+        log.debug("diagnostic copy source path: %s -> %s", src, dst)
+        try:
+            shutil.copy2(src, dst)
+        except OSError as e:
+            # 진단 PNG 저장 실패로 본 업스케일 작업 자체를 실패 처리하지 않는다 — 원인만 남긴다.
+            log.warning("diagnostic frame copy failed (label=%s src=%s): %s", label, src, e)
+            return
+        self.saved_labels.add(label)
+        log.info("diagnostic frame saved: %s", dst)
+
+
+def _warn_if_no_debug_frames(debug_dir: Path | None) -> None:
+    """진단 모드였는데 저장된 PNG 가 0장이면 조용히 넘어가지 않고 반드시 로그를 남긴다."""
+    if debug_dir is None:
+        return
+    saved = sorted(debug_dir.glob("frame_*.png"))
+    log.debug("diagnostic: actual generated PNG count in %s = %d", debug_dir, len(saved))
+    if not saved:
+        log.warning("Diagnostic mode was enabled but no diagnostic frames were saved.")
 
 
 def _read_exact(stream, n: int) -> bytes:
@@ -199,14 +276,25 @@ class LocalNcnnProvider(UpscalerProvider):
         use_ai = resolution.needs_ai_upscale(mode, info.width, info.height)
 
         out_dir = Path(self.config.output_dir) if self.config.output_dir else None
-        output = job.output_path or ff.unique_output_path_for_mode(info.path, mode, out_dir)
+        # HOTFIX-2 진단 모드(UPCON_FORCE_SOFTWARE_ENCODER)에서는 파일명에 _x264diag 를 붙여
+        # 같은 원본으로 만든 기본(NVENC) 결과와 겹치지 않게 한다 — A/B 비교용.
+        diag_suffix = "_x264diag" if ff.software_encoder_forced() else ""
+        output = job.output_path or ff.unique_output_path_for_mode(info.path, mode, out_dir, diag_suffix)
         job.output_path = output
         ff.ensure_writable_dir(output.parent)      # 30초 뒤가 아니라 지금 실패하도록
+
+        # HOTFIX-2 진단 모드: 한 번만 계산해서 AI 경로(_run_pipeline)에 넘기고, 어느 경로로
+        # 끝나든(AI/plain-resize) 작업 종료 시 0장 저장이면 반드시 경고를 남긴다. plain-resize
+        # 경로는 애초에 Real-ESRGAN 을 쓰지 않으므로(원본이 이미 목표 해상도 이상) 진단 PNG가
+        # 구조적으로 존재할 수 없다 — 그것도 "조용한 성공"이 아니라 경고로 드러나야 한다.
+        debug_dir = _debug_frame_dir()
 
         if not use_ai:
             # 원본이 이미 목표 해상도 이상(예: 4K 원본 + 1080p 선택) → 불필요한 AI 확대를 피하고
             # FFmpeg 리사이즈만 한다. GPU 가용성은 Router 가 이미 확인했으므로 여기선 안 쓸 뿐이다.
-            return self._plain_resize_job(info, output, target_w, target_h, cancel, progress)
+            result = self._plain_resize_job(info, output, target_w, target_h, cancel, progress)
+            _warn_if_no_debug_frames(debug_dir)
+            return result
 
         # 디스크 계획/검사 (AI 경로 — 청크 BMP/PNG 를 쓴다)
         temp_root = tempfs.default_temp_root(self.config.temp_dir)
@@ -231,7 +319,7 @@ class LocalNcnnProvider(UpscalerProvider):
             enc_name = ff.pick_encoder(self.config.output_encoder)
             try:
                 frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
-                                                 progress, enc_name, resize_target)
+                                                 progress, enc_name, resize_target, debug_dir)
                 progress(Progress(Phase.SAVE, frames_done, frames_done))
                 self._verify_output(output, target_w, target_h, info, enc_name)
             except UpconError as e:
@@ -247,7 +335,7 @@ class LocalNcnnProvider(UpscalerProvider):
                     output.unlink()
                 progress(Progress(Phase.PREPARE, 0, info.nb_frames, "인코더를 바꿔 다시 시작합니다"))
                 frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
-                                                 progress, "libx264", resize_target)
+                                                 progress, "libx264", resize_target, debug_dir)
                 progress(Progress(Phase.SAVE, frames_done, frames_done))
                 self._verify_output(output, target_w, target_h, info, "libx264")
         except BaseException:
@@ -261,6 +349,7 @@ class LocalNcnnProvider(UpscalerProvider):
         finally:
             tempfs.cleanup_dir(job_dir)
 
+        _warn_if_no_debug_frames(debug_dir)
         dt = time.time() - t0
         log.info("upscale done: gpu=%s (driver %s) model=%s src=%s %dx%d %.3ffps %.1fs frames=%d → %s %dx%d | "
                  "%.1fs (%.2f fps, %.2fx realtime)",
@@ -314,7 +403,7 @@ class LocalNcnnProvider(UpscalerProvider):
 
     def _run_pipeline(self, info: VideoInfo, output: Path, gpu: GpuInfo, scale: int, chunk_frames: int,
                       job_dir: Path, cancel: CancelToken, progress: ProgressCallback, enc_name: str = "libx264",
-                      resize_target: tuple[int, int] | None = None) -> int:
+                      resize_target: tuple[int, int] | None = None, debug_dir: Path | None = None) -> int:
         w, h = info.width, info.height
         frame_bytes = w * h * 3
         header = ff.bmp_header(w, h)
@@ -353,6 +442,9 @@ class LocalNcnnProvider(UpscalerProvider):
 
             chunk_idx = 0
             report(0)
+            debug_saver = _DebugFrameSaver(debug_dir, total) if debug_dir else None
+            if debug_dir is not None:
+                log.debug("diagnostic: enabled, dir=%s approx_total=%d", debug_dir, total)
             while True:
                 cancel.raise_if_cancelled()
                 if feeder.error:
@@ -369,6 +461,9 @@ class LocalNcnnProvider(UpscalerProvider):
                 if len(produced) != n_in_chunk:
                     raise UpconError("AI 업스케일 결과 프레임 수가 맞지 않습니다.",
                                      f"chunk {chunk_idx}: expected {n_in_chunk}, got {len(produced)}")
+                if debug_saver:
+                    # 인코더로 전달(및 삭제)되기 전, ncnn 이 방금 만든 원본 PNG 를 그대로 복사한다.
+                    debug_saver.on_chunk(produced)
                 frames_done += n_in_chunk
                 report(frames_done, f"{frames_done} / {max(total, frames_done)} 프레임")
 

@@ -57,10 +57,9 @@ class CloudSettingsDialog(QDialog):
         form = QFormLayout()
         self.key_edit = QLineEdit()
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_edit.setPlaceholderText("fal.ai API Key 붙여넣기")
-        existing = credentials.get_fal_key()
-        if existing:
-            self.key_edit.setText(existing)
+        self._has_existing = credentials.has_fal_key()
+        self.key_edit.setPlaceholderText(
+            "저장된 키가 있습니다 · 바꾸려면 새 API Key 입력" if self._has_existing else "fal.ai API Key 붙여넣기")
         self.show_btn = QPushButton("표시")
         self.show_btn.setCheckable(True)
         self.show_btn.toggled.connect(lambda on: self.key_edit.setEchoMode(
@@ -75,7 +74,7 @@ class CloudSettingsDialog(QDialog):
         self.test_btn = QPushButton("연결 테스트")
         self.test_btn.clicked.connect(self._test)
         self.remove_btn = QPushButton("저장된 키 삭제")
-        self.remove_btn.setEnabled(existing is not None)
+        self.remove_btn.setEnabled(self._has_existing)
         self.remove_btn.clicked.connect(self._remove)
         btns.addWidget(self.test_btn)
         btns.addWidget(self.remove_btn)
@@ -86,7 +85,7 @@ class CloudSettingsDialog(QDialog):
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.status)
-        if existing:
+        if self._has_existing:
             self._set_status(True, "저장된 API Key가 있습니다. (연결 테스트로 확인 가능)")
         else:
             self._set_status(None, "아직 연결된 계정이 없습니다.")
@@ -126,7 +125,8 @@ class CloudSettingsDialog(QDialog):
 
     # ---- 동작 ----
     def _test(self) -> None:
-        key = self.key_edit.text().strip()
+        """입력창이 비어 있고 이미 저장된 키가 있으면, 화면에 표시하지 않은 채 그 키로 테스트한다."""
+        key = self.key_edit.text().strip() or (credentials.get_fal_key() if self._has_existing else "")
         if not key:
             self._set_status(False, "API Key를 입력해 주세요.")
             return
@@ -157,6 +157,9 @@ class CloudSettingsDialog(QDialog):
     def _save(self) -> None:
         key = self.key_edit.text().strip()
         if not key:
+            if self._has_existing:
+                self.accept()   # 입력 없이 저장 → 기존 키 그대로 유지하고 닫기
+                return
             self._set_status(False, "API Key를 입력해 주세요.")
             return
         try:
@@ -169,6 +172,9 @@ class CloudSettingsDialog(QDialog):
             log.warning("keyring save failed (unexpected): %s: %s", type(e).__name__, str(e)[:160])
             self._set_status(False, f"저장 중 예상하지 못한 오류가 발생했습니다. ({type(e).__name__})")
             return
+        self._has_existing = True
+        self.key_edit.clear()
+        self.key_edit.setPlaceholderText("저장된 키가 있습니다 · 바꾸려면 새 API Key 입력")
         self._set_status(True, "API Key를 안전하게 저장했습니다.")
         self.config.cloud_provider = "fal"
         self.config.save()
@@ -177,6 +183,8 @@ class CloudSettingsDialog(QDialog):
 
     def _remove(self) -> None:
         credentials.delete_fal_key()
+        self._has_existing = False
         self.key_edit.clear()
+        self.key_edit.setPlaceholderText("fal.ai API Key 붙여넣기")
         self.remove_btn.setEnabled(False)
         self._set_status(None, "저장된 API Key를 삭제했습니다.")

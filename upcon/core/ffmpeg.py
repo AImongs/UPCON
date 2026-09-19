@@ -72,10 +72,15 @@ def unique_output_path(src: Path, scale: int, output_dir: Path | None = None) ->
     return _unique_with_stem(base_dir, f"{src.stem}_{scale}x")
 
 
-def unique_output_path_for_mode(src: Path, mode: OutputMode, output_dir: Path | None = None) -> Path:
-    """scene01.mp4 → scene01_2x.mp4 / scene01_1080p.mp4 / scene01_4k.mp4. (로컬 Provider 전용)"""
+def unique_output_path_for_mode(src: Path, mode: OutputMode, output_dir: Path | None = None,
+                                extra_suffix: str = "") -> Path:
+    """scene01.mp4 → scene01_2x.mp4 / scene01_1080p.mp4 / scene01_4k.mp4. (로컬 Provider 전용)
+
+    extra_suffix: 기본값("")에서는 기존 동작과 동일. HOTFIX-2 진단 모드(강제 libx264)에서만
+    local_ncnn.py 가 "_x264diag" 를 넘겨, 같은 원본으로 만든 기본(NVENC) 결과와 파일명이
+    겹치지 않게 한다."""
     base_dir = resolve_output_dir(src, output_dir)
-    return _unique_with_stem(base_dir, f"{src.stem}{output_suffix(mode)}")
+    return _unique_with_stem(base_dir, f"{src.stem}{output_suffix(mode)}{extra_suffix}")
 
 
 def fps_fraction(info: VideoInfo) -> str:
@@ -104,6 +109,15 @@ def start_frame_decoder(src: Path, fps: str) -> subprocess.Popen:
 HW_ENCODERS = ("h264_nvenc", "h264_amf", "h264_qsv")
 _hw_encoder_cache: dict[str, bool] = {}
 
+# HOTFIX-2 진단 전용: 이 환경변수가 설정되면(빈 값/0/false 가 아니면) 하드웨어 인코더
+# probe 자체를 건너뛰고 무조건 libx264 를 쓴다 — RTX 4060 Ti에서 NVENC 경로와 software
+# x264 경로를 같은 AI 프레임으로 A/B 비교하기 위함. 일반 UI 설정에는 노출하지 않는다.
+FORCE_SOFTWARE_ENCODER_ENV = "UPCON_FORCE_SOFTWARE_ENCODER"
+
+
+def software_encoder_forced() -> bool:
+    return os.environ.get(FORCE_SOFTWARE_ENCODER_ENV, "").strip().lower() not in ("", "0", "false")
+
 
 def encoder_usable(name: str) -> bool:
     """해당 인코더로 256×256 1프레임을 실제로 인코딩해 본다 (드라이버/하드웨어 유무 확인).
@@ -125,7 +139,13 @@ def encoder_usable(name: str) -> bool:
 
 
 def pick_encoder(preference: str = "auto") -> str:
-    """'auto' 면 사용 가능한 하드웨어 인코더 → 없으면 libx264."""
+    """'auto' 면 사용 가능한 하드웨어 인코더 → 없으면 libx264.
+
+    UPCON_FORCE_SOFTWARE_ENCODER 가 설정되면(HOTFIX-2 진단 모드) 하드웨어 인코더 probe를
+    건너뛰고 무조건 libx264 를 반환한다 — 기본값(미설정)에서는 기존 동작과 완전히 같다."""
+    if software_encoder_forced():
+        log.info("%s 설정됨 → libx264 강제 사용 (진단 모드, HOTFIX-2)", FORCE_SOFTWARE_ENCODER_ENV)
+        return "libx264"
     if preference and preference != "auto":
         return preference if encoder_usable(preference) else "libx264"
     for name in HW_ENCODERS:

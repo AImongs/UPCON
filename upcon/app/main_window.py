@@ -8,7 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout,
+    QWidget,
 )
 
 from upcon import APP_NAME, APP_TAGLINE, APP_VERSION
@@ -17,9 +18,11 @@ from upcon.app import file_dialogs
 from upcon.app.about_dialog import AboutDialog
 from upcon.app.cloud_settings import CloudSettingsDialog
 from upcon.app.controller import Controller
+from upcon.app.widgets.cloud_confirm_dialog import CloudConfirmDialog
 from upcon.app.widgets.options_panel import OptionsPanel
 from upcon.app.widgets.progress_panel import ProgressPanel
 from upcon.app.widgets.queue_panel import QueuePanel
+from upcon.core import credentials
 from upcon.core.config import AppConfig
 from upcon.core.constants import DEFAULT_SCALE, OutputMode, ProcessMode, output_suffix, parse_output_mode
 from upcon.core.env import SystemEnv
@@ -340,11 +343,15 @@ class MainWindow(QMainWindow):
         output_mode = self.options.output_mode()
         decision = self.controller.decide(self.options.mode(), scale, output_mode)
         if decision.provider is None:
-            self._warn("업스케일을 시작할 수 없습니다", decision.message)
+            if self.options.mode() != ProcessMode.LOCAL and not credentials.has_fal_key():
+                self._prompt_connect_cloud(decision.message)
+            else:
+                self._warn("업스케일을 시작할 수 없습니다", decision.message)
             return
         if decision.provider.kind == "cloud":
-            total, n = self.controller.total_cloud_cost(scale)
-            if not self._confirm_cloud(n, total, decision.message):
+            jobs = [j for j in self.controller.jobs.jobs if j.status == JobStatus.PENDING and j.info is not None]
+            total, _n = self.controller.total_cloud_cost(scale)
+            if not self._confirm_cloud(jobs, scale, total, decision.message):
                 return
         n = self.controller.start_all(decision.provider, decision.message, scale, output_mode)
         log.info("batch start: %d files via %s", n, decision.provider.id)
@@ -352,21 +359,22 @@ class MainWindow(QMainWindow):
         self._eta.reset()
         self.progress.set_current("", "시작 중...", None, decision.message)
 
-    def _confirm_cloud(self, n: int, total: float, why: str) -> bool:
+    def _confirm_cloud(self, jobs: list[Job], scale: int, total: float, why: str) -> bool:
+        dlg = CloudConfirmDialog(jobs, scale, total, self.config.krw_per_usd, why, self)
+        return dlg.exec() == QDialog.DialogCode.Accepted
+
+    def _prompt_connect_cloud(self, message: str) -> None:
+        """클라우드를 쓰려는데 fal.ai 키가 없을 때: 안내 + 바로 설정을 열 수 있는 버튼."""
         box = QMessageBox(self)
-        box.setWindowTitle("클라우드 업스케일 확인")
-        box.setIcon(QMessageBox.Icon.Question)
-        krw = f" (약 {format_krw(int(total * self.config.krw_per_usd))})" if self.config.krw_per_usd > 0 else ""
-        box.setText(
-            f"<b>클라우드 GPU로 업스케일합니다.</b><br>{why}<br><br>"
-            f"총 <b>{n}개</b> 영상<br><b>예상 비용: 약 {format_usd(total)}{krw}</b><br>"
-            "<span style='color:#6b7280'>내 fal.ai 계정에서 청구됩니다. 실제 청구액은 예상과 다를 수 있습니다.</span>"
-        )
-        go = box.addButton("계속", QMessageBox.ButtonRole.AcceptRole)
+        box.setWindowTitle("클라우드 GPU 연결 필요")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(message)
+        open_btn = box.addButton("설정 열기", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(go)
+        box.setDefaultButton(open_btn)
         box.exec()
-        return box.clickedButton() is go
+        if box.clickedButton() is open_btn:
+            self._open_settings()
 
     def _on_skip(self) -> None:
         self.skip_btn.setEnabled(False)

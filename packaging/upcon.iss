@@ -30,13 +30,21 @@
 #define IconRel "..\upcon\resources\upcon.ico"
 #define HaveIcon FileExists(AddBackslash(SourcePath) + IconRel)
 
+; HOTFIX-2 진단용 빌드 전용. /DDIAGBUILD 를 ISCC 에 넘길 때만 켜진다 — 기본(정식) 빌드는
+; 이 심볼이 정의되지 않으므로 아래 #ifdef DIAGBUILD 블록이 전부 그대로 스킵되고, 정식
+; 배포본은 이번 변경 이전과 완전히 같은 결과물을 만든다(파일명·[Files]·[Icons] 전부 무변화).
+#define DiagBat "diag\UPCON_Software_Encoder_Test.bat"
+#define DiagNcnnBat "diag\UPCON_NCNN_DIAG.bat"
+
 [Setup]
 ; AppId 는 절대 바꾸지 않는다. 이 값이 같아야 향후 버전이 기존 설치 위에 업그레이드된다.
 AppId={{B04C51EA-BF7B-4CEC-9D05-F18BD9D99E54}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
-VersionInfoVersion=0.3.0
+; 예전엔 여기 버전이 하드코딩돼 있어 /DMyAppVersion 을 바꿔도 EXE 파일 속성(자세히 탭)의
+; 파일 버전만 안 바뀌는 불일치가 있었다 — {#MyAppVersion} 으로 단일 소스에 맞춘다.
+VersionInfoVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
 AppCopyright={#MyAppCopyright}
@@ -57,7 +65,11 @@ AllowNoIcons=yes
 
 ; --- 출력 ---
 OutputDir=..\dist-installer
+#ifdef DIAGBUILD
+OutputBaseFilename=UPCON_Setup_{#MyAppVersion}_DIAG
+#else
 OutputBaseFilename=UPCON_Setup_{#MyAppVersion}
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -103,9 +115,19 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; 검증된 Portable 빌드를 통째로 설치 (UPCON.exe + _internal\ = bin, models, docs, 라이선스)
 Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#ifdef DIAGBUILD
+; HOTFIX-2 진단 전용: libx264 강제 launcher + ncnn/Vulkan 독립 진단 도구
+; (일반 배포본에는 포함되지 않는다)
+Source: "{#DiagBat}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#DiagNcnnBat}"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppDescription}"
+#ifdef DIAGBUILD
+Name: "{group}\{#MyAppName} - 소프트웨어 인코더 테스트"; Filename: "{app}\UPCON_Software_Encoder_Test.bat"; Comment: "libx264 강제 진단 테스트 (NVENC 미사용, 이번 실행에만 적용)"
+Name: "{group}\{#MyAppName} - ncnn Vulkan 진단"; Filename: "{app}\UPCON_NCNN_DIAG.bat"; Comment: "Real-ESRGAN ncnn/Vulkan 단계를 UPCON 파이프라인과 분리해서 직접 테스트"
+#endif
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 

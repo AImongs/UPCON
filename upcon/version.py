@@ -7,7 +7,7 @@ tests/test_packaging.py::test_version_single_source_of_truth 가 자동으로 �
 
 from __future__ import annotations
 
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 
 APP_NAME = "UPCON"
 APP_TAGLINE = "AI VIDEO UPSCALER"

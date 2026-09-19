@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from upcon.core.errors import UpconError
 from upcon.core.jobs import CancelledError, CancelToken, Job, Phase
 from upcon.core.probe import probe_video
 from upcon.core.router import Router
+from upcon.providers import local_ncnn as ln
 from upcon.providers.local_ncnn import LocalNcnnProvider
 
 @pytest.fixture(scope="module")
@@ -381,3 +383,109 @@ def test_plain_resize_transcodes_pcm_audio_to_aac(tmp_path, ffmpeg_bin):
     o = probe_video(out)
     assert o.has_audio and o.audio_codec == "aac"
     ff.verify_video_decodable(out)
+
+
+# ---------------------------------------------------------------- HOTFIX-2: 진단 PNG 저장
+# "진단 launcher 실행 시 UPCON_DIAG_FRAMES 폴더는 생기는데 PNG 가 0장" 리포트 대응.
+# info.nb_frames(추정치) 기반 절대 인덱스 계산 대신, 실제 ncnn 청크 결과만 근거로 저장하도록
+# local_ncnn._DebugFrameSaver 로 다시 설계했다 — first/last 는 항상 보장되고, middle 은
+# 근사 임계값으로 저장된다.
+
+def test_no_debug_env_saves_nothing(cfg, env, monkeypatch, tmp_path, sample_480p):
+    """진단 env 없음 → PNG 저장 안 함."""
+    _gpu_required(env)
+    monkeypatch.delenv("UPCON_DEBUG_SAVE_FRAMES_DIR", raising=False)
+    src = sample_480p
+    LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    assert not list(tmp_path.glob("**/*.png"))
+
+
+def test_debug_env_saves_at_least_one_frame(cfg, env, monkeypatch, tmp_path, sample_480p):
+    """진단 env 있음 → 최소 1장(first) 저장, 최대 3장."""
+    _gpu_required(env)
+    debug_dir = tmp_path / "diag"
+    monkeypatch.setenv("UPCON_DEBUG_SAVE_FRAMES_DIR", str(debug_dir))
+    src = sample_480p
+    LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    saved = sorted(debug_dir.glob("frame_*.png"))
+    assert 1 <= len(saved) <= 3
+    assert (debug_dir / "frame_first.png").is_file()
+    import subprocess
+    for p in saved:
+        r = subprocess.run([str(ff.ffmpeg_path()), "-v", "error", "-i", str(p), "-f", "null", "-"],
+                           capture_output=True)
+        assert r.returncode == 0 and not r.stderr, f"{p} not a valid decodable PNG: {r.stderr}"
+
+
+def test_debug_frames_capped_at_three_with_many_chunks(cfg, env, monkeypatch, tmp_path, sample_480p):
+    """여러 chunk 로 나뉘어도 최대 3장, first/middle/last 라벨이 각각 한 번씩만 존재."""
+    _gpu_required(env)
+    debug_dir = tmp_path / "diag_multi"
+    monkeypatch.setenv("UPCON_DEBUG_SAVE_FRAMES_DIR", str(debug_dir))
+    cfg.chunk_frames_min = 8
+    cfg.chunk_frames_max = 8   # 854x480 24fps 5초 = 120프레임 → 최소 15개 청크로 강제 분할
+    src = sample_480p
+    LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    saved = sorted(p.name for p in debug_dir.glob("frame_*.png"))
+    assert len(saved) <= 3
+    assert saved == sorted(set(saved)), "같은 라벨 파일이 중복 생성되면 안 된다(고정 파일명으로 덮어써야 함)"
+    assert "frame_first.png" in saved and "frame_last.png" in saved
+
+
+def test_debug_frames_short_clip_no_duplicate_crash(cfg, env, monkeypatch, tmp_path, sample_480p_portrait):
+    """아주 짧은 영상(총 프레임이 작아 first/middle/last 대상이 겹쳐도) 정상 동작해야 한다."""
+    _gpu_required(env)
+    debug_dir = tmp_path / "diag_short"
+    monkeypatch.setenv("UPCON_DEBUG_SAVE_FRAMES_DIR", str(debug_dir))
+    src = sample_480p_portrait   # 3초 클립, 상대적으로 프레임 수 적음
+    LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    saved = list(debug_dir.glob("frame_*.png"))
+    assert 1 <= len(saved) <= 3
+
+
+def test_debug_frames_korean_path(cfg, env, monkeypatch, tmp_path, sample_480p):
+    """진단 폴더 경로 자체가 한글이어도 정상 저장돼야 한다."""
+    _gpu_required(env)
+    debug_dir = tmp_path / "한글 진단 폴더" / "프레임"
+    monkeypatch.setenv("UPCON_DEBUG_SAVE_FRAMES_DIR", str(debug_dir))
+    src = sample_480p
+    LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    saved = list(debug_dir.glob("frame_*.png"))
+    assert len(saved) >= 1
+
+
+def test_debug_dir_preexisting_with_unrelated_file(cfg, env, monkeypatch, tmp_path, sample_480p):
+    """진단 폴더가 이미 존재하고(다른 실행의 잔재 등) 무관한 파일이 있어도 정상 동작."""
+    _gpu_required(env)
+    debug_dir = tmp_path / "diag_existing"
+    debug_dir.mkdir(parents=True)
+    (debug_dir / "leftover.txt").write_text("previous run", encoding="utf-8")
+    monkeypatch.setenv("UPCON_DEBUG_SAVE_FRAMES_DIR", str(debug_dir))
+    src = sample_480p
+    LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    assert (debug_dir / "leftover.txt").is_file(), "기존 무관한 파일을 지우면 안 된다"
+    assert list(debug_dir.glob("frame_*.png"))
+
+
+def test_debug_copy_failure_logs_warning_but_job_still_succeeds(cfg, env, monkeypatch, tmp_path, sample_480p,
+                                                                  caplog):
+    """진단 PNG copy 가 실패해도(권한/디스크 등) 본 업스케일 작업은 계속 성공해야 하고,
+    실패 원인과 '저장된 게 0장'이라는 사실 둘 다 로그에 남아야 한다."""
+    _gpu_required(env)
+    debug_dir = tmp_path / "diag_fail"
+    monkeypatch.setenv("UPCON_DEBUG_SAVE_FRAMES_DIR", str(debug_dir))
+
+    def _boom(*a, **k):
+        raise OSError("simulated copy failure (test)")
+    monkeypatch.setattr(ln.shutil, "copy2", _boom)
+
+    src = sample_480p
+    with caplog.at_level(logging.WARNING, logger="upcon.providers.local_ncnn"):
+        out = LocalNcnnProvider(cfg).upscale(Job(input_path=src, scale=2, info=probe_video(src)), lambda p: None, env)
+    assert out.exists()
+    o = probe_video(out)
+    assert (o.width, o.height) == (1708, 960)
+    assert not list(debug_dir.glob("frame_*.png")), "copy 가 매번 실패했으므로 파일이 없어야 한다"
+    messages = [r.message for r in caplog.records]
+    assert any("diagnostic frame copy failed" in m for m in messages)
+    assert any("Diagnostic mode was enabled but no diagnostic frames were saved" in m for m in messages)

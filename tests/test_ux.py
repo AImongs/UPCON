@@ -346,6 +346,98 @@ def test_settings_button_and_dialog_texts(win, monkeypatch):
     dlg.close()
 
 
+def test_cloud_settings_never_prefills_stored_key_in_field(win, monkeypatch):
+    """저장된 키가 있어도 입력창에 실제 값을 채우지 않는다 — '표시' 토글로도 저장된 값이 그대로 보이면 안 된다."""
+    from upcon.app import cloud_settings
+    real_key = "12345678-abcd-4321-abcd-1234567890ab:0123456789abcdef0123456789abcdef"
+    monkeypatch.setattr(cloud_settings.credentials, "get_fal_key", lambda: real_key)
+    monkeypatch.setattr(cloud_settings.credentials, "has_fal_key", lambda: True)
+    dlg = cloud_settings.CloudSettingsDialog(win.config, win.controller.cloud_endpoint(), win)
+    assert dlg.key_edit.text() == ""
+    assert real_key not in dlg.key_edit.text()
+    assert dlg.remove_btn.isEnabled()
+    dlg.close()
+
+
+# ---------------------------------------------------------------- Cloud 실행 전 확인 대화상자: 취소/승인
+def test_cloud_confirm_dialog_cancel_keeps_batch_stopped(win, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from upcon.app.widgets.cloud_confirm_dialog import CloudConfirmDialog
+    from upcon.core import credentials
+    from upcon.core.constants import ProcessMode
+
+    monkeypatch.setattr(credentials, "get_fal_key", lambda: "fake-key")
+    monkeypatch.setattr(CloudConfirmDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+
+    job = _job(tmp_path, "a.mp4")
+    _load(win, [job])
+    win.options.set_mode(ProcessMode.CLOUD)
+    win._on_start_all()
+    assert not win._batch_running
+    assert job.status == JobStatus.PENDING, "취소하면 요청 자체가 나가지 않아야 한다"
+
+
+def test_cloud_confirm_dialog_approve_starts_batch(win, qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from upcon.app.widgets.cloud_confirm_dialog import CloudConfirmDialog
+    from upcon.core import credentials
+    from upcon.core.constants import ProcessMode
+    from upcon.providers.fal_flashvsr import FalFlashVSRProvider
+
+    monkeypatch.setattr(credentials, "get_fal_key", lambda: "fake-key")
+    monkeypatch.setattr(CloudConfirmDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    calls = []
+
+    def fake_upscale(self, job, progress, env=None):
+        calls.append(job.id)
+        out = job.input_path.with_name(job.input_path.stem + "_2x.mp4")
+        out.write_bytes(b"result")
+        return out
+    monkeypatch.setattr(FalFlashVSRProvider, "upscale", fake_upscale)
+
+    job = _job(tmp_path, "a.mp4")
+    _load(win, [job])
+    win.options.set_mode(ProcessMode.CLOUD)
+    win._on_start_all()
+    t0 = time.time()
+    # 배치 완료는 워커 스레드 → GUI 스레드로 큐잉된 시그널(batchEvent)로 반영된다 — 이벤트 루프를 돌려야
+    # win._batch_running 이 제때 False 로 내려가고, 그렇지 않으면 fixture teardown 의 closeEvent 가
+    # "작업 진행 중" 확인창을 실제로 띄워 테스트가 멈춘다.
+    while (job.status not in (JobStatus.DONE, JobStatus.FAILED) or win._batch_running) and time.time() - t0 < 5:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert job.status == JobStatus.DONE and calls == [job.id], job.error_message
+    assert not win._batch_running
+
+
+def test_cloud_mode_without_key_prompts_to_open_settings(win, tmp_path, monkeypatch):
+    """클라우드를 골랐는데 fal.ai 키가 없으면: 요청을 보내지 않고 설정을 열 수 있는 안내를 띄운다."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from upcon.core import credentials
+    from upcon.core.constants import ProcessMode
+
+    monkeypatch.setattr(credentials, "get_fal_key", lambda: None)
+
+    def auto_accept(self):
+        for b in self.buttons():
+            if self.buttonRole(b) == QMessageBox.ButtonRole.AcceptRole:
+                b.click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", auto_accept)
+    opened = []
+    monkeypatch.setattr(type(win), "_open_settings", lambda self: opened.append(1))
+
+    job = _job(tmp_path, "a.mp4")
+    _load(win, [job])
+    win.options.set_mode(ProcessMode.CLOUD)
+    win._on_start_all()
+    assert opened == [1]
+    assert not win._batch_running
+
+
 # ---------------------------------------------------------------- M8: 중복 실행 방지
 def _pump(qapp, ms=300):
     t0 = time.time()
