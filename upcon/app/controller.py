@@ -19,13 +19,16 @@ from upcon.core.env import SystemEnv, detect_system_env
 from upcon.core.errors import UpconError
 from upcon.core.jobs import BatchSummary, Job, JobManager, JobStatus, ProgressCallback
 from upcon.core.power import KeepAwake
-from upcon.core.pricing import CostEstimate
 from upcon.core.probe import VideoInfo, probe_video
 from upcon.core.router import Decision, Router
 from upcon.core.tempfs import cleanup_stale_jobs, default_temp_root
 from upcon.providers.base import UpscalerProvider
-from upcon.providers.fal_flashvsr import FalFlashVSRProvider
+from upcon.providers.fal_bytedance import FalByteDanceProvider
 from upcon.providers.local_ncnn import LocalNcnnProvider
+
+# FlashVSR provider(upcon.providers.fal_flashvsr)는 삭제하지 않고 보존한다 — 다만 화질 비교
+# 테스트(2026-09-20) 결과 ByteDance PRO AIGC가 더 우수해 기본 클라우드 배선에서는 제외했다.
+# 코드/테스트는 그대로 남아 있어 필요하면 다시 배선할 수 있다.
 
 log = logging.getLogger(__name__)
 
@@ -41,12 +44,12 @@ class Controller(QObject):
         self.config = config
         self.env: SystemEnv | None = None
         self.local_ncnn = LocalNcnnProvider(config)
-        self.fal_flashvsr = FalFlashVSRProvider(config)
+        self.cloud_provider = FalByteDanceProvider(config)
         self.providers: dict[str, UpscalerProvider] = {
             self.local_ncnn.id: self.local_ncnn,
-            self.fal_flashvsr.id: self.fal_flashvsr,
+            self.cloud_provider.id: self.cloud_provider,
         }
-        self.router = Router(config, [self.local_ncnn], [self.fal_flashvsr])
+        self.router = Router(config, [self.local_ncnn], [self.cloud_provider])
         self.keep_awake = KeepAwake()
         self.jobs = JobManager(self._run_job, self._emit_job, self._emit_batch, self.keep_awake)
         self._probed.connect(self._on_probed_main)
@@ -75,11 +78,11 @@ class Controller(QObject):
         self.env = env
         return self.router.decide(mode, env, scale, output_mode)
 
-    def cloud_cost(self, info: VideoInfo, scale: int) -> CostEstimate:
-        return self.fal_flashvsr.cost(info, scale)
+    def cloud_cost(self, info: VideoInfo, scale: int):
+        return self.cloud_provider.cost(info, scale)
 
     def cloud_endpoint(self) -> str:
-        return self.fal_flashvsr.endpoint
+        return self.cloud_provider.endpoint
 
     def total_cloud_cost(self, scale: int, only_pending: bool = True) -> tuple[float, int]:
         """(전체 예상 비용 USD, 대상 파일 수)."""
@@ -138,7 +141,10 @@ class Controller(QObject):
             self.save_queue()
             return
         job.info = info
-        job.estimated_cost_usd = self.cloud_cost(info, job.scale).usd_display
+        est = self.cloud_cost(info, job.scale)
+        job.estimated_cost_usd = est.usd_display
+        job.cost_uncertain = getattr(est, "uncertain", False)
+        job.cost_uncertain_note = getattr(est, "uncertain_note", "")
         self.jobs._wake.set()
         self.jobUpdated.emit(job)
 

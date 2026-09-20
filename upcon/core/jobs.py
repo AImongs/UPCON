@@ -136,6 +136,10 @@ class Job:
     note: str = ""
     estimated_cost_usd: float | None = None
     actual_cost_usd: float | None = None
+    # 클라우드 예상 비용이 "공식 요율 미확인 구간"이라 확정값이 아닐 때만 True
+    # (현재는 ByteDance provider 만 채운다 — FlashVSR 는 항상 기본값 False/"").
+    cost_uncertain: bool = False
+    cost_uncertain_note: str = ""
     started_at: float = 0.0
     finished_at: float = 0.0
     cancel: CancelToken = field(default_factory=CancelToken)
@@ -169,6 +173,7 @@ class Job:
         self.started_at = self.finished_at = 0.0
         self.actual_cost_usd = None
         self.cancel = CancelToken()
+        # cost_uncertain/cost_uncertain_note 는 다음 probe 때 다시 계산되므로 여기서 초기화하지 않는다.
 
 
 JobRunner = Callable[[Job, ProgressCallback], Path]

@@ -24,13 +24,13 @@ class ProcessMode(str, Enum):
 PROCESS_MODE_LABELS: dict[ProcessMode, str] = {
     ProcessMode.AUTO: "자동",
     ProcessMode.LOCAL: "내 PC GPU",
-    ProcessMode.CLOUD: "클라우드 GPU",
+    ProcessMode.CLOUD: "클라우드 고화질",
 }
 
 PROCESS_MODE_HINTS: dict[ProcessMode, str] = {
     ProcessMode.AUTO: "내 PC로 처리할 수 있으면 PC에서, 아니면 클라우드에서 처리합니다.",
     ProcessMode.LOCAL: "내 PC의 그래픽카드로 처리합니다. 비용이 들지 않습니다.",
-    ProcessMode.CLOUD: "클라우드 GPU로 처리합니다. 내 fal.ai 계정에서 비용이 청구됩니다.",
+    ProcessMode.CLOUD: "ByteDance PRO · AI 영상 고화질 복원 · 처리시간이 오래 걸릴 수 있습니다. 내 fal.ai 계정에서 비용이 청구됩니다.",
 }
 
 

@@ -43,8 +43,8 @@ class CloudSettingsDialog(QDialog):
         title.setObjectName("dialogTitle")
         lay.addWidget(title)
         desc = QLabel(
-            "내 PC 그래픽카드 대신 인터넷의 GPU(fal.ai)로 처리하는 <b>선택 기능</b>입니다. "
-            "내 PC로 처리할 수 있으면 연결하지 않아도 됩니다.<br>"
+            "내 PC 그래픽카드 대신 인터넷의 GPU(fal.ai · ByteDance PRO)로 처리하는 <b>선택 기능</b>입니다. "
+            "AI 영상 고화질 복원 · 처리시간이 오래 걸릴 수 있습니다. 내 PC로 처리할 수 있으면 연결하지 않아도 됩니다.<br>"
             "클라우드 처리는 <b>내 fal.ai 계정</b>으로 실행되며 비용도 내 계정에서 청구됩니다.<br>"
             f"API Key는 <a href='{FAL_KEYS_URL}'>fal.ai 대시보드 → Keys</a> 에서 만들 수 있습니다. "
             "입력한 키는 이 PC에 안전하게 저장됩니다."
@@ -110,7 +110,21 @@ class CloudSettingsDialog(QDialog):
         self.status.setText(f"<span style='color:{color};font-weight:600'>{icon}{text}</span>")
 
     def _price_text(self) -> str:
-        """기본 화면은 한 줄로: 요금이 어떻게 정해지는지. 계산식/조회 시각은 툴팁."""
+        """기본 화면은 한 줄로: 요금이 어떻게 정해지는지. 계산식/조회 시각은 툴팁.
+
+        ByteDance는 FlashVSR과 가격 구조 자체가 다르다(메가픽셀 정액이 아니라 해상도 tier ×
+        fps 구간별 초당 단가 × PRO 10배) — pricing.DOCUMENTED_UNIT_PRICES_USD_PER_MP 에는
+        이 endpoint가 없으므로 별도 분기로 처리한다 (KeyError 방지)."""
+        if self.endpoint == pricing.BYTEDANCE_ENDPOINT:
+            self._price_tooltip = (
+                "요금 = (해상도 tier(1080p/2K/4K) × fps 구간별 초당 단가) × PRO 10배 × 영상 길이(초).\n"
+                "1080p 기준 standard 요율 $0.0072/초(≤30fps), $0.0144/초(60fps) — PRO는 그 10배.\n"
+                f"공식 문서 {pricing.BYTEDANCE_PRICE_DOC_DATE} 기준. 31~59fps·61~120fps 구간은 정확한 "
+                "요율이 공개되어 있지 않아, 알려진 가장 가까운 요율로 최소 예상치만 계산합니다.\n"
+                "실제 청구액은 fal.ai가 결정하며 예상값과 다를 수 있습니다."
+            )
+            return ("요금은 출력 해상도·프레임레이트·영상 길이에 따라 계산되며(ByteDance PRO), "
+                    "시작 전에 예상 비용을 보여 드립니다. 실제 청구액은 예상과 다를 수 있습니다.")
         p = self.config.cloud_unit_prices.get(self.endpoint)
         if p:
             src = f"fal API 조회 {self.config.cloud_price_checked_at[:16]}"

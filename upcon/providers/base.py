@@ -3,9 +3,8 @@
     UpscalerProvider
     ├── LocalNcnnProvider      (STEP 3, 구현됨)
     ├── LocalSeedVR2Provider   (예정)
-    ├── FalFlashVSRProvider    (STEP 4)
-    ├── FalSeedVRProvider      (STEP 4)
-    └── FalRealESRGANProvider  (STEP 4)
+    ├── FalByteDanceProvider   (기본 클라우드 엔진, 2026-09-20~ — ByteDance Video Upscaler PRO AIGC)
+    └── FalFlashVSRProvider    (STEP 4, 구현됨. 화질 비교 후 기본 배선에서는 제외됨 — 코드는 보존)
 """
 
 from __future__ import annotations

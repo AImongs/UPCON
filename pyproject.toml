@@ -1,6 +1,6 @@
 [project]
 name = "upcon"
-version = "0.3.2"
+version = "0.3.3"
 description = "UPCON - AI Video Upscaler (Windows)"
 requires-python = ">=3.12"
 dependencies = [

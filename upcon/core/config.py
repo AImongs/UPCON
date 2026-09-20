@@ -45,7 +45,7 @@ class AppConfig:
     # 대용량 모델(SeedVR2 등) 다운로드 위치. 사용자가 직접 선택. 비어 있으면 미설치 상태.
     engine_dir: str = ""
     cloud_provider: str = "fal"                      # credential 자체는 keyring 에만 저장
-    cloud_model: str = "fal-ai/flashvsr/upscale/video"
+    cloud_model: str = "fal-ai/bytedance-upscaler/upscale/video"
     # 연결 테스트 때 fal Pricing API 로 조회한 단가 캐시 {endpoint: usd_per_unit}. 없으면 문서 상수 사용.
     cloud_unit_prices: dict[str, float] = field(default_factory=dict)
     cloud_price_checked_at: str = ""
@@ -84,7 +84,23 @@ class AppConfig:
                 cfg.routing = RoutingConfig(**{kk: vv for kk, vv in v.items() if kk in RoutingConfig.__dataclass_fields__})
             elif k in cls.__dataclass_fields__:
                 setattr(cfg, k, v)
+        if cfg._migrate_cloud_model_to_bytedance():
+            cfg.save(path)
         return cfg
+
+    _LEGACY_FLASHVSR_ENDPOINT = "fal-ai/flashvsr/upscale/video"
+    _DEFAULT_BYTEDANCE_ENDPOINT = "fal-ai/bytedance-upscaler/upscale/video"
+
+    def _migrate_cloud_model_to_bytedance(self) -> bool:
+        """기존 사용자의 config.json 에 저장돼 있던 cloud_model=FlashVSR endpoint 를
+        새 기본 클라우드 엔진(ByteDance PRO)으로 옮긴다. fal API Key(keyring)는 이 함수가
+        절대 건드리지 않는다 — cloud_model 문자열 하나만 바꾼다. cloud_unit_prices 에 캐시된
+        FlashVSR 단가는 그대로 둔다(더는 쓰이지 않지만 삭제할 이유도 없다 — 데이터 손실 방지)."""
+        if self.cloud_model == self._LEGACY_FLASHVSR_ENDPOINT:
+            log.info("cloud_model 마이그레이션: FlashVSR endpoint → ByteDance PRO endpoint (fal API Key는 유지됨)")
+            self.cloud_model = self._DEFAULT_BYTEDANCE_ENDPOINT
+            return True
+        return False
 
     def save(self, path: Path | None = None) -> None:
         path = path or config_file()

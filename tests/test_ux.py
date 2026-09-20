@@ -384,7 +384,9 @@ def test_cloud_confirm_dialog_approve_starts_batch(win, qapp, tmp_path, monkeypa
     from upcon.app.widgets.cloud_confirm_dialog import CloudConfirmDialog
     from upcon.core import credentials
     from upcon.core.constants import ProcessMode
-    from upcon.providers.fal_flashvsr import FalFlashVSRProvider
+    # 기본 클라우드 provider가 FlashVSR -> ByteDance PRO 로 바뀌었다(2026-09-20) — Controller/Router가
+    # 실제로 고르는 provider를 patch 해야 진짜 네트워크 호출(가짜 키로 실패/지연) 없이 테스트가 끝난다.
+    from upcon.providers.fal_bytedance import FalByteDanceProvider
 
     monkeypatch.setattr(credentials, "get_fal_key", lambda: "fake-key")
     monkeypatch.setattr(CloudConfirmDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
@@ -395,7 +397,7 @@ def test_cloud_confirm_dialog_approve_starts_batch(win, qapp, tmp_path, monkeypa
         out = job.input_path.with_name(job.input_path.stem + "_2x.mp4")
         out.write_bytes(b"result")
         return out
-    monkeypatch.setattr(FalFlashVSRProvider, "upscale", fake_upscale)
+    monkeypatch.setattr(FalByteDanceProvider, "upscale", fake_upscale)
 
     job = _job(tmp_path, "a.mp4")
     _load(win, [job])
