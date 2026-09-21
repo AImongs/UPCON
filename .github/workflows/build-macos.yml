@@ -203,6 +203,12 @@ jobs:
           echo "=== UPCON executable architecture (섹션 13) ==="
           file "dist/UPCON.app/Contents/MacOS/UPCON"
           lipo -info "dist/UPCON.app/Contents/MacOS/UPCON" || true
+          echo "=== [TEMP DEBUG] bin-macos-arm64/ 존재 확인 (datas 소스) ==="
+          ls -la bin-macos-arm64/ || echo "bin-macos-arm64/ 없음!"
+          echo "=== [TEMP DEBUG] .app 안에서 ffmpeg/ffprobe 어디에 있는지 전체 탐색 ==="
+          find dist/UPCON.app -iname "ffmpeg*" -o -iname "ffprobe*"
+          echo "=== [TEMP DEBUG] Contents 트리 (bin 관련만) ==="
+          find dist/UPCON.app/Contents -iname "*bin*" -maxdepth 3
 
       - name: Verify architecture matches target (섹션 13 — Rosetta 가정 안 함)
         run: |
