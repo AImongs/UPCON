@@ -11,19 +11,27 @@ packaging/upcon.spec(Windows 전용, 정식 배포 스펙)은 이 파일이 존�
 같은 이름의 변수(datas/hiddenimports/excludes/a/exe 등)를 쓰지만 서로 다른 스펙 파일이라
 PyInstaller 실행 시 하나만 로드되고 절대 섞이지 않는다.
 
-이번 STEP(MAC-1) 구성 — "먼저 앱 실행 + FFmpeg + Cloud Provider가 가능한 macOS 기반":
-- Real-ESRGAN weight(models/)와 Windows 전용 FFmpeg/ncnn 실행파일(bin/, .exe)을 동봉하지 않는다.
-  로컬 GPU 업스케일은 이번 STEP에서 macOS 미지원이다(upcon.platform.local_upscale_unsupported_reason,
+이번 구성 — "Apple Silicon Cloud-first 앱 (STEP MAC-1) + FFmpeg 동봉 (STEP MAC-4)":
+- Real-ESRGAN weight(models/)와 Windows 전용 ncnn 실행파일(bin/*.exe)을 동봉하지 않는다.
+  로컬 GPU 업스케일은 이번 STEP에서도 macOS 미지원이다(upcon.platform.local_upscale_unsupported_reason,
   LocalNcnnProvider.check_availability 가 사용자에게 명확히 안내하고 죽지 않는다).
-- FFmpeg/FFprobe 는 이 macOS 빌드에서는 동봉하지 않고 시스템 PATH(예: Homebrew)에서 찾는다
-  (upcon.core.binaries.find_binary 의 기존 PATH 폴백을 그대로 쓴다 — 새 코드 아님).
-  자체 동봉(그리고 필요한 라이선스/Corresponding Source 의무)은 이번 STEP 범위 밖이며,
-  실제로 동봉하게 되면 별도로 라이선스 의무를 조사해야 한다(STEP MAC-1 보고서 참고).
+- FFmpeg/FFprobe(arm64, GPL — libx264 하나만 추가한 최소 구성): bin-macos-arm64/ 에
+  scripts/build_ffmpeg_macos_arm64.sh 로 "우리가 정확히 아는 FFmpeg n8.1.2 + x264 소스"에서
+  직접 빌드해 두면(STEP MAC-4B, 출처/커밋/SHA-256/configure/라이선스/Corresponding Source
+  확보 방법은 docs/MACOS_FFMPEG_SOURCE.md 참고 — osxexperts.net 등 제3자 사전 빌드본은 더 이상
+  쓰지 않는다) 이 스펙이 자동으로 datas 에 포함해 .app 안의 bin/ 에 넣는다 — upcon.core.binaries.find_binary
+  의 "동봉 bin/ 우선 → PATH 폴백" 구조를 코드 변경 없이 그대로 탄다(project_root() 가 frozen
+  상태에서 sys._MEIPASS 이므로 macOS 에서도 Windows 와 완전히 같은 경로 규칙).
+  받아두지 않았으면(로컬 개발 중 등) 이전처럼 시스템 PATH(예: Homebrew)로 자동 폴백한다 —
+  fetch 를 안 해도 빌드 자체는 깨지지 않는다.
 - keyring 백엔드는 macOS Keychain(keyring.backends.macOS)을 명시적으로 포함한다
   (PyInstaller 번들 안에서는 entry-point 자동 탐색이 실패할 수 있어 Windows 와 같은 이유로 필요).
-- 아이콘: upcon/resources/upcon.icns 가 있으면 쓰고, 없으면 PyInstaller 기본 아이콘으로 빌드된다
-  (Windows spec 의 upcon.ico 패턴과 동일한 '있으면 쓰고 없으면 기본값' 원칙).
-- 코드서명/Notarization 은 하지 않는다. Unsigned 개발 빌드다.
+- 아이콘: upcon/resources/upcon.icns (STEP MAC-3, scripts/make_icns.py 로 upcon.png 원본에서
+  생성 — 새 디자인이 아니라 기존 브랜드를 그대로 재사용) 를 쓴다. 없으면 PyInstaller 기본
+  아이콘으로 빌드된다(Windows spec 의 upcon.ico 패턴과 동일한 '있으면 쓰고 없으면 기본값' 원칙).
+- 코드서명은 Developer ID 로는 하지 않는다(Unsigned 개발 빌드, STEP MAC-6 이후 과제).
+  단 동봉된 FFmpeg/ffprobe 는 Apple Silicon 실행 자체를 위한 최소 ad-hoc 서명을
+  build-macos.yml 이 PyInstaller 빌드 "이후"(.app 안 최종 바이너리에) 적용한다.
 """
 from pathlib import Path
 
@@ -31,9 +39,10 @@ ROOT = Path(SPECPATH).parent
 
 datas = [
     (str(ROOT / "upcon" / "resources" / "styles.qss"), "upcon/resources"),
-    # 정보(About) 화면의 "제3자 라이선스 전문". 이 macOS 빌드는 FFmpeg/Real-ESRGAN 을 동봉하지
-    # 않으므로 about_dialog.py 의 THIRD_PARTY_SUMMARY 가 그 사실을 명확히 알리는 macOS 전용
-    # 문구를 쓴다(전문 파일 자체는 그대로 참고용으로 동봉).
+    # 정보(About) 화면의 "제3자 라이선스 전문". 이 macOS 빌드는 Real-ESRGAN 을 동봉하지 않으므로
+    # about_dialog.py 의 THIRD_PARTY_SUMMARY 가 그 사실을 명확히 알리는 macOS 전용 문구를 쓴다
+    # (전문 파일 자체는 그대로 참고용으로 동봉. FFmpeg 는 STEP MAC-4 부터 동봉되므로 그 사실은
+    # about_dialog.py 쪽에서 FFmpeg 존재 여부와 무관하게 정확한 문구로 갱신했다).
     (str(ROOT / "docs" / "THIRD_PARTY_NOTICES.md"), "docs"),
 ]
 
@@ -41,6 +50,15 @@ ICNS = ROOT / "upcon" / "resources" / "upcon.icns"
 APP_ICON = str(ICNS) if ICNS.is_file() else None
 if APP_ICON:
     datas.append((str(ICNS), "upcon/resources"))
+
+# STEP MAC-4B: FFmpeg/ffprobe(arm64) — scripts/build_ffmpeg_macos_arm64.sh 가 빌드해 둔 경우에만
+# 포함한다. Windows spec(upcon.spec)이 bin/ 전체를 통째로 datas 에 넣는 것과 같은 방식으로,
+# PyInstaller 의 binaries= 의존성 재분석(코드사인/링크 재작성 위험)을 피하기 위해 datas 를 쓴다.
+FFMPEG_BIN_DIR = ROOT / "bin-macos-arm64"
+if FFMPEG_BIN_DIR.is_dir():
+    for f in sorted(FFMPEG_BIN_DIR.iterdir()):
+        if f.is_file() and f.name in ("ffmpeg", "ffprobe"):
+            datas.append((str(f), "bin"))
 
 hiddenimports = [
     "keyring.backends.macOS",

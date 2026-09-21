@@ -16,6 +16,18 @@ name: Build macOS (UPCON)
 # macos-13(Intel x64) 은 이미 제거되어 라벨 자체가 존재하지 않는다. 이번 STEP 은 arm64
 # 빌드만 실행하므로 macos-13 은 고치지 않고 그대로 두었다 — build_x64 경로를 쓸 때 별도로
 # 손봐야 한다.
+#
+# STEP MAC-3(아이콘 + ByteDance PRO mock smoke) / STEP MAC-4B(FFmpeg/ffprobe arm64 직접 빌드):
+# 1차 macOS 버전은 Apple Silicon arm64 전용, Cloud-first(ByteDance PRO)로 완성한다.
+# Apple Silicon Local Real-ESRGAN 은 이번 STEP 에서 활성화하지 않는다(조사만, production 미포함).
+# fal.ai 유료 호출은 이 워크플로 어디에서도 발생하지 않는다 — Secrets 에 실제 키를 두지 않았고,
+# ByteDance provider 검증은 scripts/macos_ci_smoke.py 의 mock 체크(7~12번)로만 한다.
+#
+# STEP MAC-4B: FFmpeg 는 더 이상 제3자 사전 빌드본(osxexperts.net)을 받지 않는다 — Corresponding
+# Source 를 제공할 수 없었기 때문이다. 이제 scripts/build_ffmpeg_macos_arm64.sh 가 FFmpeg
+# n8.1.2(공식 태그, Windows 와 동일 버전) + x264(고정 커밋) 소스를 직접 받아 이 러너에서
+# 컴파일한다 — 정확히 어떤 소스로 만들어졌는지 100% 알 수 있고, Corresponding Source 도 같은
+# 스크립트가 dist-ffmpeg-source-macos/ 에 함께 만든다(docs/MACOS_FFMPEG_SOURCE.md 참고).
 
 on:
   workflow_dispatch:
@@ -35,6 +47,9 @@ on:
       - "packaging/upcon_macos.spec"
       - "pyproject.toml"
       - "requirements*.txt"
+      - "scripts/build_ffmpeg_macos_arm64.sh"
+      - "scripts/macos_ci_smoke.py"
+      - "scripts/make_icns.py"
       - ".github/workflows/build-macos.yml"
 
 permissions:
@@ -87,16 +102,6 @@ jobs:
           python3 -c "import platform; print(platform.machine(), platform.python_version())"
           file "$(python3 -c 'import sys; print(sys.executable)')"
 
-      - name: Install FFmpeg/FFprobe (Homebrew — 재현성 확인을 위해 버전을 로그에 남긴다)
-        run: |
-          brew install ffmpeg
-          echo "=== FFmpeg/FFprobe 버전 (재현성 기록용) ==="
-          ffmpeg -version
-          ffprobe -version
-          echo "=== FFmpeg architecture ==="
-          file "$(command -v ffmpeg)"
-          file "$(command -v ffprobe)"
-
       - name: Install Python dependencies (런타임 + 개발/테스트)
         run: |
           python3 -m pip install --upgrade pip
@@ -121,6 +126,56 @@ jobs:
           assert plat.IS_MACOS, f'IS_MACOS 가 True 여야 하는데 {plat.describe()}'
           print('upcon', upcon.APP_VERSION, '|', plat.describe())
           "
+
+      # ================================================================
+      # STEP MAC-4B: FFmpeg/ffprobe 를 "우리가 정확히 아는 소스"에서 직접 빌드한다.
+      # docs/MACOS_FFMPEG_SOURCE.md 에 적힌 것과 정확히 같은 tag/commit/SHA-256 을 쓴다 —
+      # 스크립트 자체가 그 문서와 다르면 즉시 실패하도록(verify_sha256/커밋 대조) 만들어져 있다.
+      # ================================================================
+      - name: Build FFmpeg/ffprobe from source (STEP MAC-4B, arm64, x264 정적 링크)
+        if: matrix.arch == 'arm64'
+        run: bash scripts/build_ffmpeg_macos_arm64.sh
+
+      - name: Verify built FFmpeg/ffprobe (architecture / version / functional smoke)
+        if: matrix.arch == 'arm64'
+        run: |
+          echo "=== 아키텍처(섹션 13) — arm64 단일(THIN), Rosetta 불필요 ==="
+          file bin-macos-arm64/ffmpeg bin-macos-arm64/ffprobe
+          lipo -archs bin-macos-arm64/ffmpeg bin-macos-arm64/ffprobe || true
+
+          echo "=== ffmpeg -version ==="
+          bin-macos-arm64/ffmpeg -version
+          echo "=== ffprobe -version ==="
+          bin-macos-arm64/ffprobe -version
+
+          echo "=== GPL 확인(configuration 문자열: --enable-gpl 있음 / --enable-nonfree 없음) ==="
+          bin-macos-arm64/ffmpeg -version | grep -q -- '--enable-gpl' && echo "OK: --enable-gpl"
+          bin-macos-arm64/ffmpeg -version | grep -q -- '--enable-nonfree' && { echo "::error::--enable-nonfree 가 켜져 있습니다(의도하지 않음)"; exit 1; } || echo "OK: --enable-nonfree 없음"
+
+          echo "=== FFmpeg functional smoke: 테스트 영상 생성 → probe → audio probe → mux → decode validation ==="
+          TMP="$(mktemp -d)"
+          bin-macos-arm64/ffmpeg -v error -y -f lavfi -i "testsrc=duration=1:size=320x240:rate=10" \
+                        -f lavfi -i "sine=frequency=440:duration=1" \
+                        -c:v libx264 -c:a aac -shortest "$TMP/test.mp4"
+          test -s "$TMP/test.mp4" && echo "OK: 테스트 영상 생성"
+          bin-macos-arm64/ffprobe -v error -show_entries stream=codec_type,codec_name -of csv=p=0 "$TMP/test.mp4"
+          bin-macos-arm64/ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$TMP/test.mp4" | grep -q aac \
+            && echo "OK: audio stream(aac) 확인"
+          bin-macos-arm64/ffmpeg -v error -y -i "$TMP/test.mp4" -c copy -movflags +faststart "$TMP/test_muxed.mp4"
+          test -s "$TMP/test_muxed.mp4" && echo "OK: mux(remux) 성공"
+          bin-macos-arm64/ffmpeg -v error -nostdin -i "$TMP/test_muxed.mp4" -map 0:v:0 -f null - \
+            && echo "OK: decode validation(-f null) 성공"
+          rm -rf "$TMP"
+
+          echo "=== 바이너리 크기 ==="
+          ls -lh bin-macos-arm64/ffmpeg bin-macos-arm64/ffprobe
+
+          # pytest/헤드리스 스모크가 Homebrew 가 아니라 이 빌드를 쓰도록, find_binary() 가
+          # 우선 찾는 bin/ 에도 같은 파일을 넣는다(upcon.core.binaries 코드는 변경하지 않는다 —
+          # 기존 "동봉 bin/ 우선 → PATH 폴백" 구조를 그대로 쓸 뿐이다).
+          mkdir -p bin
+          cp bin-macos-arm64/ffmpeg bin-macos-arm64/ffprobe bin/
+          chmod +x bin/ffmpeg bin/ffprobe
 
       - name: Run pytest (GPU 필요한 로컬 업스케일 테스트는 자동 skip)
         if: github.event.inputs.run_pytest != 'false'
@@ -159,10 +214,85 @@ jobs:
             x64)   echo "$ACTUAL" | grep -qi "x86_64" || { echo "::error::실행파일이 x86_64 가 아닙니다: $ACTUAL"; exit 1; } ;;
           esac
 
+      - name: Verify app icon is bundled (STEP MAC-3, 섹션 12)
+        run: |
+          if [ -f upcon/resources/upcon.icns ]; then
+            test -f "dist/UPCON.app/Contents/Resources/upcon.icns" && echo "OK: Contents/Resources/upcon.icns 존재"
+            ICON_KEY="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "dist/UPCON.app/Contents/Info.plist" 2>/dev/null || true)"
+            echo "Info.plist CFBundleIconFile = ${ICON_KEY:-<none>}"
+            [ "$ICON_KEY" = "upcon.icns" ] || { echo "::error::Info.plist 의 CFBundleIconFile 이 upcon.icns 가 아닙니다"; exit 1; }
+          else
+            echo "::warning::upcon/resources/upcon.icns 가 없어 기본 아이콘으로 빌드됨 (scripts/make_icns.py 를 먼저 실행하세요)"
+          fi
+
+      - name: Verify .app bundled FFmpeg/ffprobe + ad-hoc sign + re-verify (STEP MAC-4B, 섹션 14~17)
+        if: matrix.arch == 'arm64'
+        run: |
+          BUNDLED_FF="dist/UPCON.app/Contents/MacOS/bin/ffmpeg"
+          BUNDLED_FP="dist/UPCON.app/Contents/MacOS/bin/ffprobe"
+          echo "=== 14. .app 내부 ffmpeg/ffprobe 확인 ==="
+          test -f "$BUNDLED_FF" && echo "OK: .app 안에 bin/ffmpeg 존재"
+          test -f "$BUNDLED_FP" && echo "OK: .app 안에 bin/ffprobe 존재"
+
+          echo "=== 15. 서명 없이 먼저 실행 시도 (Apple Silicon 서명 강제 여부 실측) ==="
+          chmod +x "$BUNDLED_FF" "$BUNDLED_FP"
+          if "$BUNDLED_FF" -version >/tmp/preadhoc_ffmpeg.log 2>&1; then
+            echo "결과: 서명 없이도 실행됨 (이 러너에서는 ad-hoc 서명이 필수가 아니었음)"
+          else
+            echo "결과: 서명 없이는 실행 실패 → ad-hoc 서명이 필요함을 확인"
+            tail -5 /tmp/preadhoc_ffmpeg.log || true
+          fi
+
+          echo "=== 16. codesign 상태 확인 ==="
+          codesign -dv "$BUNDLED_FF" 2>&1 || echo "(서명 없음 — 15번에서 이미 실행 성공/실패로 필요 여부를 확인했다)"
+          codesign -dv "$BUNDLED_FP" 2>&1 || echo "(서명 없음)"
+
+          echo "=== 17. 필요하면 ad-hoc sign 적용 (codesign -s - , Developer ID 아님) ==="
+          codesign -s - --force --timestamp=none "$BUNDLED_FF"
+          codesign -s - --force --timestamp=none "$BUNDLED_FP"
+          codesign -dv "$BUNDLED_FF" 2>&1 | grep -i "adhoc\|Signature" || true
+          codesign -dv "$BUNDLED_FP" 2>&1 | grep -i "adhoc\|Signature" || true
+
+          echo "=== 서명 후 재검증: .app 내부 바이너리를 직접 실행 ==="
+          "$BUNDLED_FF" -version
+          "$BUNDLED_FP" -version
+          TMP="$(mktemp -d)"
+          "$BUNDLED_FF" -v error -y -f lavfi -i "testsrc=duration=1:size=320x240:rate=10" \
+                        -c:v libx264 -pix_fmt yuv420p "$TMP/t.mp4"
+          test -s "$TMP/t.mp4" && echo "OK: 서명 후에도 .app 내부 ffmpeg 정상 동작"
+          rm -rf "$TMP"
+
+      - name: .app 실행 smoke — 패키징된 실행 파일 자체를 잠깐 띄워 본다 (STEP MAC-5B, 섹션 18)
+        env:
+          UPCON_DATA_DIR: ${{ runner.temp }}/upcon_app_smoke_data
+        run: |
+          APP_BIN="dist/UPCON.app/Contents/MacOS/UPCON"
+          echo "=== $APP_BIN 실행(백그라운드, QT_QPA_PLATFORM=offscreen) ==="
+          "$APP_BIN" &
+          APP_PID=$!
+          sleep 5
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "OK: .app 실행 파일이 5초 동안 크래시 없이 떠 있음(PID=$APP_PID)"
+            kill "$APP_PID"
+            wait "$APP_PID" 2>/dev/null || true
+          else
+            wait "$APP_PID"
+            RC=$?
+            echo "::error::.app 실행 파일이 5초 안에 종료됨(exit=$RC) — PyInstaller 패키징 문제 가능성"
+            exit 1
+          fi
+
       - name: Build DMG (섹션 10)
         run: |
           VERSION="$(python3 -c 'from upcon.version import __version__; print(__version__)')"
-          DMG_NAME="UPCON_${VERSION}_macOS_${{ matrix.arch }}.dmg"
+          # arm64 는 목표 파일명 그대로 "AppleSilicon" 라벨을 쓴다(1차 지원 대상, 사용자 확인 요청).
+          # x64(Intel, workflow_dispatch 옵션으로만 빌드)는 구분을 위해 "Intel" 라벨을 쓴다.
+          case "${{ matrix.arch }}" in
+            arm64) ARCH_LABEL="AppleSilicon" ;;
+            x64)   ARCH_LABEL="Intel" ;;
+            *)     ARCH_LABEL="${{ matrix.arch }}" ;;
+          esac
+          DMG_NAME="UPCON_${VERSION}_macOS_${ARCH_LABEL}.dmg"
           echo "DMG_NAME=$DMG_NAME" >> "$GITHUB_ENV"
           STAGE="$(mktemp -d)/UPCON_dmg_stage"
           mkdir -p "$STAGE"
@@ -183,12 +313,13 @@ jobs:
           test -L "$MOUNT_DIR/Applications" && echo "OK: Applications 심볼릭 링크 존재 (드래그 설치용)"
           hdiutil detach "$MOUNT_DIR"
 
-      - name: Unsigned build 안내 (섹션 10/16 — 코드서명/Notarization/Gatekeeper 우회 없음)
+      - name: Unsigned build 안내 (섹션 10/16 — Developer ID 서명/Notarization/Gatekeeper 우회 없음)
         run: |
-          echo "이 빌드는 서명되지 않은(Unsigned) 개발 빌드입니다."
-          echo "코드서명, Apple Developer 인증서, Notarization 을 하지 않았습니다."
+          echo "이 .app 전체는 Developer ID 로 서명되지 않은(Unsigned) 개발 빌드입니다."
+          echo "Apple Developer 인증서 구매/Notarization 은 하지 않았습니다(STEP MAC-6 이후 과제, 아직 진행 안 함)."
           echo "Gatekeeper 를 비활성화하거나 우회하는 스크립트도 포함하지 않았습니다."
-          codesign -dv "dist/UPCON.app" 2>&1 || echo "(예상된 결과: 서명 없음)"
+          echo "(참고) Apple Silicon 실행 요건 때문에 동봉 FFmpeg/ffprobe 에만 최소 ad-hoc 서명(codesign -s -)을 적용했습니다 — Developer ID 서명이 아닙니다."
+          codesign -dv "dist/UPCON.app" 2>&1 || echo "(예상된 결과: .app 자체는 서명 없음)"
 
       - name: Upload UPCON.app artifact
         uses: actions/upload-artifact@v4

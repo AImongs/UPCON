@@ -16,21 +16,38 @@ from PySide6.QtWidgets import (
 
 from upcon import APP_DESCRIPTION, APP_NAME, APP_VERSION, COPYRIGHT
 from upcon import platform as plat
-from upcon.core.paths import notices_file
+from upcon.core.paths import bundled_bin_dir, notices_file
 
 log = logging.getLogger(__name__)
 
 # 사용자에게 보여줄 핵심 고지. 전문은 THIRD_PARTY_NOTICES.md.
 # 주의: 아직 확정되지 않은 Corresponding Source URL 을 여기에 적지 않는다.
-# STEP MAC-1: macOS 빌드에는 FFmpeg 실행파일도 Real-ESRGAN weight 도 동봉하지 않으므로
-# (Windows 배포 정책은 그대로, 동봉 여부만 실제와 다르게 말하면 안 된다) 문구를 나눈다.
-if plat.IS_MACOS:
+# STEP MAC-1/MAC-4: macOS 빌드는 Real-ESRGAN weight 는 동봉하지 않지만, FFmpeg 는 STEP MAC-4
+# 부터 동봉될 수 있다(scripts/build_ffmpeg_macos_arm64.sh 로 직접 빌드해 뒀을 때만). "동봉 여부를 실제와
+# 다르게 말하지 않는다"는 원칙을 지키기 위해, 하드코딩된 가정 대신 실제 번들 상태를 직접
+# 확인해 문구를 고른다 — 개발 중(fetch 안 함)에는 정직하게 "PATH 사용"으로, 배포용 빌드
+# (fetch 함)에는 "동봉됨"으로 자동으로 맞다.
+_MACOS_FFMPEG_BUNDLED = plat.IS_MACOS and (bundled_bin_dir() / "ffmpeg").is_file()
+
+if plat.IS_MACOS and _MACOS_FFMPEG_BUNDLED:
+    THIRD_PARTY_SUMMARY = (
+        "이 macOS 빌드에는 Real-ESRGAN(ncnn) 모델·실행기가 동봉되어 있지 않습니다. "
+        "각 구성요소는 별도의 제3자 소프트웨어이며, 저작권·라이선스 전문은 아래 "
+        "'제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
+        "• FFmpeg — Apple Silicon(arm64) 네이티브 정적 빌드가 동봉되어 있습니다(GPL). "
+        "출처·버전·SHA-256·Corresponding Source 확보 계획은 docs/MACOS_FFMPEG_SOURCE.md 참고.\n"
+        "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan(ncnn 기반) — 이 macOS 빌드에는 아직 포함되어 있지 않습니다. "
+        "내 PC GPU 업스케일 대신 클라우드 업스케일(fal.ai)만 지원합니다.\n"
+        "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"
+        "• 그 밖의 오픈소스 구성요소 — 전문 참조"
+    )
+elif plat.IS_MACOS:
     THIRD_PARTY_SUMMARY = (
         "이 macOS 빌드에는 FFmpeg 실행파일과 Real-ESRGAN(ncnn) 모델·실행기가 동봉되어 있지 않습니다. "
         "각 구성요소는 별도의 제3자 소프트웨어이며, 저작권·라이선스 전문은 아래 "
         "'제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
-        "• FFmpeg — 이 macOS 빌드는 동봉하지 않고 시스템에 설치된 FFmpeg(예: Homebrew)를 사용합니다. "
-        "FFmpeg 는 UPCON 과 별개의 제3자 소프트웨어이며 빌드 구성에 따라 GPLv3 등의 라이선스를 따릅니다.\n"
+        "• FFmpeg — 이 빌드는 동봉하지 않고 시스템에 설치된 FFmpeg(예: Homebrew)를 사용합니다. "
+        "FFmpeg 는 UPCON 과 별개의 제3자 소프트웨어이며 빌드 구성에 따라 GPL/LGPL 등의 라이선스를 따릅니다.\n"
         "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan(ncnn 기반) — 이 macOS 빌드에는 아직 포함되어 있지 않습니다. "
         "내 PC GPU 업스케일 대신 클라우드 업스케일(fal.ai)만 지원합니다.\n"
         "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"

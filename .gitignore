@@ -29,6 +29,11 @@ __pycache__/
 # --- 동봉 실행파일 (scripts/fetch_binaries.py 로 받음; 라이선스 파일만 추적) ---
 bin/*
 !bin/LICENSE-*.txt
+# --- macOS 동봉 실행파일 (scripts/build_ffmpeg_macos_arm64.sh 로 직접 빌드; STEP MAC-4B) ---
+bin-macos-arm64/*
+!bin-macos-arm64/LICENSE-*.txt
+# --- macOS FFmpeg Corresponding Source (같은 스크립트가 만듦; STEP MAC-4B) ---
+dist-ffmpeg-source-macos/
 # --- 모델: 공식 배포 파일은 fetch 로 받고, UPCON 변환본(general-*)과 라이선스는 git 에 포함 ---
 models/realesr-animevideov3-*
 models/realesrgan-*
