@@ -37,6 +37,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+# python3 scripts/macos_ci_smoke.py 로 직접 실행하면(=파일 경로로 실행) 파이썬이 sys.path[0]에
+# scripts/ 만 넣는다 — pytest 는 rootdir 를 자동으로 넣어주므로 이 문제가 없었을 뿐이다.
+# packaging/test_installer.py 와 같은 방식으로 저장소 루트를 명시적으로 추가한다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 RESULTS: list[tuple[str, bool, str]] = []
 
 
