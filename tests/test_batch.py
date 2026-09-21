@@ -124,6 +124,16 @@ def _slow_runner(job, progress):
     return job.input_path
 
 
+# 100회 * 0.02s = 명목상 2초짜리 가짜 작업이지만, 이 값은 실측이 아니라 가정치였다. GitHub
+# Actions macOS(macos-15) 공유 러너에서 실제로 측정해 보니(scripts/_diag_batch_timing.py 로
+# 3회 반복, 2026-09-21) 스레드 wake-up/스케줄링 지연 때문에 한 작업이 완주하는 데 약 9~10초가
+# 걸렸다(0.02s sleep 이 실제로는 평균 ~0.095s 소요 — Windows 개발 PC 대비 약 5배). 데드락이나
+# JobManager 버그가 아니라(코드 경로는 두 플랫폼에서 동일) 이 러너의 순수한 스케줄링 속도
+# 차이다 — 두 작업이 연달아 완주해야 하는 대기(아래 45초)는 관찰된 최악값(~19.5초)의 약
+# 2배 여유를 둔 것이다. 무작정 큰 값을 넣은 게 아니라 이 실측을 근거로 최소한으로 늘렸다.
+_SLOW_JOB_CI_MARGIN_SEC = 45
+
+
 def test_skip_current_continues_with_next(tmp_path):
     m, updates, events = _make(_slow_runner)
     jobs = [_job(tmp_path, f"s{i}.mp4") for i in range(3)]
@@ -132,7 +142,7 @@ def test_skip_current_continues_with_next(tmp_path):
     m.start()
     _wait(lambda: jobs[0].status == JobStatus.RUNNING and jobs[0].progress.frames_done >= 5)
     m.skip_current()
-    _wait(lambda: "finished" in events, 15)
+    _wait(lambda: "finished" in events, _SLOW_JOB_CI_MARGIN_SEC)  # 남은 두 작업(s1, s2)이 완주해야 함
     assert [j.status for j in jobs] == [JobStatus.CANCELLED, JobStatus.DONE, JobStatus.DONE]
 
 
@@ -148,9 +158,9 @@ def test_stop_all_keeps_pending_and_restart_resumes(tmp_path):
     _wait(lambda: "stopped" in events, 15)
     assert [j.status for j in jobs] == [JobStatus.DONE, JobStatus.CANCELLED, JobStatus.PENDING, JobStatus.PENDING]
     assert awake.calls == ["acquire", "release"]
-    # 다시 시작 → 남은 대기 항목부터
+    # 다시 시작 → 남은 대기 항목부터 (t2, t3 둘 다 완주해야 하므로 skip_current 테스트와 같은 여유 필요)
     m.start()
-    _wait(lambda: events.count("finished") == 1, 20)
+    _wait(lambda: events.count("finished") == 1, _SLOW_JOB_CI_MARGIN_SEC)
     assert [j.status for j in jobs] == [JobStatus.DONE, JobStatus.CANCELLED, JobStatus.DONE, JobStatus.DONE]
     assert awake.calls == ["acquire", "release", "acquire", "release"]
     # 실패/취소 항목 다시 시도
