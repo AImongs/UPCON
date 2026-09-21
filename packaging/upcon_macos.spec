@@ -19,9 +19,13 @@ PyInstaller 실행 시 하나만 로드되고 절대 섞이지 않는다.
   scripts/build_ffmpeg_macos_arm64.sh 로 "우리가 정확히 아는 FFmpeg n8.1.2 + x264 소스"에서
   직접 빌드해 두면(STEP MAC-4B, 출처/커밋/SHA-256/configure/라이선스/Corresponding Source
   확보 방법은 docs/MACOS_FFMPEG_SOURCE.md 참고 — osxexperts.net 등 제3자 사전 빌드본은 더 이상
-  쓰지 않는다) 이 스펙이 자동으로 datas 에 포함해 .app 안의 bin/ 에 넣는다 — upcon.core.binaries.find_binary
-  의 "동봉 bin/ 우선 → PATH 폴백" 구조를 코드 변경 없이 그대로 탄다(project_root() 가 frozen
-  상태에서 sys._MEIPASS 이므로 macOS 에서도 Windows 와 완전히 같은 경로 규칙).
+  쓰지 않는다) 이 스펙이 자동으로 datas 에 포함해 .app 안에 넣는다 — 단 PyInstaller 의 macOS
+  BUNDLE() 단계는 datas 로 넣은 항목이 실제 Mach-O 실행파일이면 "binary vs. data
+  reclassification" 으로 Contents/MacOS/ 가 아니라 Contents/Frameworks/ 아래로 재배치한다
+  (Apple 앱 번들 관례 — Windows onedir 에는 이 구분이 없다; STEP MAC-4B CI 에서 실측 확인).
+  그래서 upcon.core.paths.bundled_bin_dir() 가 macOS 프리즈 빌드에서는 Contents/Frameworks/bin
+  도 함께 확인하도록 되어 있다 — upcon.core.binaries.find_binary 의 "동봉 bin/ 우선 → PATH
+  폴백" 구조 자체는 그대로다.
   받아두지 않았으면(로컬 개발 중 등) 이전처럼 시스템 PATH(예: Homebrew)로 자동 폴백한다 —
   fetch 를 안 해도 빌드 자체는 깨지지 않는다.
 - keyring 백엔드는 macOS Keychain(keyring.backends.macOS)을 명시적으로 포함한다

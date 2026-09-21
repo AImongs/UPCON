@@ -22,8 +22,22 @@ def resources_dir() -> Path:
 
 
 def bundled_bin_dir() -> Path:
-    """동봉된 ffmpeg / ffprobe / ncnn 실행파일 위치."""
-    return project_root() / "bin"
+    """동봉된 ffmpeg / ffprobe / ncnn 실행파일 위치.
+
+    macOS(.app) 프리즈 빌드에서는 PyInstaller 의 BUNDLE() 단계가 datas 로 넣은 항목 중
+    실제 Mach-O 실행파일로 인식되는 것들을 "binary vs. data reclassification" 으로 걸러내
+    Contents/MacOS/ 가 아니라 Contents/Frameworks/ 아래로 재배치한다(Apple 앱 번들 관례 —
+    라이브러리/실행 파일은 Frameworks, 순수 리소스만 Resources; 실측: STEP MAC-4B CI, ffmpeg/
+    ffprobe 가 Contents/Frameworks/bin/ 에 위치). Windows/Linux 의 onedir 배포에는 이런
+    구분이 없다. project_root()(=sys._MEIPASS)는 항상 실행 파일이 있는 Contents/MacOS 를
+    가리키므로, macOS 프리즈 빌드에서는 형제 디렉터리인 Contents/Frameworks/bin 도 함께
+    확인한다(있으면 그쪽을 쓰고, 없으면 기존 규칙으로 폴백)."""
+    d = project_root() / "bin"
+    if _plat.IS_MACOS and getattr(sys, "frozen", False):
+        frameworks_bin = project_root().parent / "Frameworks" / "bin"
+        if frameworks_bin.is_dir():
+            return frameworks_bin
+    return d
 
 
 def bundled_models_dir() -> Path:

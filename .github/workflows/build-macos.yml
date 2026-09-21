@@ -203,12 +203,6 @@ jobs:
           echo "=== UPCON executable architecture (섹션 13) ==="
           file "dist/UPCON.app/Contents/MacOS/UPCON"
           lipo -info "dist/UPCON.app/Contents/MacOS/UPCON" || true
-          echo "=== [TEMP DEBUG] bin-macos-arm64/ 존재 확인 (datas 소스) ==="
-          ls -la bin-macos-arm64/ || echo "bin-macos-arm64/ 없음!"
-          echo "=== [TEMP DEBUG] .app 안에서 ffmpeg/ffprobe 어디에 있는지 전체 탐색 ==="
-          find dist/UPCON.app -iname "ffmpeg*" -o -iname "ffprobe*"
-          echo "=== [TEMP DEBUG] Contents 트리 (bin 관련만) ==="
-          find dist/UPCON.app/Contents -iname "*bin*" -maxdepth 3
 
       - name: Verify architecture matches target (섹션 13 — Rosetta 가정 안 함)
         run: |
@@ -234,8 +228,13 @@ jobs:
       - name: Verify .app bundled FFmpeg/ffprobe + ad-hoc sign + re-verify (STEP MAC-4B, 섹션 14~17)
         if: matrix.arch == 'arm64'
         run: |
-          BUNDLED_FF="dist/UPCON.app/Contents/MacOS/bin/ffmpeg"
-          BUNDLED_FP="dist/UPCON.app/Contents/MacOS/bin/ffprobe"
+          # PyInstaller 의 BUNDLE() 이 datas 로 넣은 ffmpeg/ffprobe 를 실제 Mach-O 실행파일로
+          # 인식해 "binary vs. data reclassification" 으로 Contents/MacOS/ 가 아니라
+          # Contents/Frameworks/ 아래로 재배치한다(Apple 앱 번들 관례) — CI #7 에서 실측 확인.
+          # upcon.core.paths.bundled_bin_dir() 도 같은 위치를 보도록 맞춰 두었다(런타임 탐색이
+          # 실제 파일 위치와 어긋나면 앱이 동봉 FFmpeg 를 못 찾는 실사용 버그가 되므로).
+          BUNDLED_FF="dist/UPCON.app/Contents/Frameworks/bin/ffmpeg"
+          BUNDLED_FP="dist/UPCON.app/Contents/Frameworks/bin/ffprobe"
           echo "=== 14. .app 내부 ffmpeg/ffprobe 확인 ==="
           test -f "$BUNDLED_FF" && echo "OK: .app 안에 bin/ffmpeg 존재"
           test -f "$BUNDLED_FP" && echo "OK: .app 안에 bin/ffprobe 존재"
