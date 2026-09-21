@@ -27,6 +27,7 @@ import importlib.util
 import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -216,6 +217,11 @@ def installer_test_src() -> str:
     return (ROOT / "packaging" / "test_installer.py").read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="real_user_data_dir()는 Windows LOCALAPPDATA(Inno installer 데이터 경로) 전제 — "
+           "macOS 에는 대응하는 installer/설치 경로 개념이 없다(DMG 는 drag-install)",
+)
 def test_assert_isolated_rejects_real_data_dir_and_relatives(installer_test_module):
     """1, 5: 실제 사용자 데이터 경로/그 상하위/임시폴더 밖/생성 안 된 폴더는 전부 즉시 실패해야 한다."""
     ti = installer_test_module
@@ -231,6 +237,11 @@ def test_assert_isolated_rejects_real_data_dir_and_relatives(installer_test_modu
             ti.assert_isolated(bad)
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="real_user_data_dir()는 Windows LOCALAPPDATA(Inno installer 데이터 경로) 전제 — "
+           "macOS 에는 대응하는 installer/설치 경로 개념이 없다(DMG 는 drag-install)",
+)
 def test_assert_isolated_accepts_real_isolated_temp_dir(installer_test_module):
     """진짜 격리된(시스템 임시 폴더 하위, 생성됨, 실제 경로와 무관) 폴더는 통과해야 한다."""
     ti = installer_test_module

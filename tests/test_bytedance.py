@@ -593,11 +593,12 @@ def test_config_migration_never_touches_fal_api_key(tmp_path, monkeypatch):
     """cloud_model 마이그레이션은 config.json 문자열 하나만 바꾼다 — keyring의 실제 API Key는
     config.json 에 아예 저장되지 않으므로 로드/마이그레이션과 완전히 무관해야 한다.
 
-    keyring.set_keyring() 은 프로세스 전역 상태다 — 이 테스트가 끝난 뒤 실제 Windows 자격 증명
-    관리자 백엔드로 반드시 복원해야, 이후 실행되는 다른 테스트(예: test_cloud.py 의 실제
-    Windows keyring 왕복 테스트)가 가짜 백엔드를 보고 오작동하지 않는다 (tests/test_cloud.py 의
-    mem_keyring 픽스처와 동일한 원칙)."""
+    keyring.set_keyring() 은 프로세스 전역 상태다 — 이 테스트가 끝난 뒤 원래 백엔드로 반드시
+    복원해야, 이후 실행되는 다른 테스트가 가짜 백엔드를 보고 오작동하지 않는다 (원래 백엔드를
+    호출 전에 keyring.get_keyring() 으로 저장해두는, tests/test_cloud.py 의 mem_keyring
+    픽스처와 동일한 플랫폼 독립적 원칙 — Windows 백엔드 이름을 하드코딩하지 않는다)."""
     from upcon.core import credentials
+    original_keyring = keyring.get_keyring()
     kr = _MemKeyring()
     keyring.set_keyring(kr)
     monkeypatch.delenv("FAL_KEY", raising=False)
@@ -611,7 +612,7 @@ def test_config_migration_never_touches_fal_api_key(tmp_path, monkeypatch):
         assert FAKE_KEY not in p.read_text(encoding="utf-8")  # config.json 에는 애초에 안 들어감
     finally:
         credentials.delete_fal_key()
-        keyring.set_keyring(keyring.core.load_keyring("keyring.backends.Windows.WinVaultKeyring"))
+        keyring.set_keyring(original_keyring)
 
 
 # ============================================================== 가짜(mock) 유닛으로 실제 API 요약 (paid submit 아님)

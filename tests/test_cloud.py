@@ -104,11 +104,12 @@ class _MemKeyring(keyring.backend.KeyringBackend):
 
 @pytest.fixture
 def mem_keyring(monkeypatch):
+    original_keyring = keyring.get_keyring()
     kr = _MemKeyring()
     keyring.set_keyring(kr)
     monkeypatch.delenv("FAL_KEY", raising=False)
     yield kr
-    keyring.set_keyring(keyring.core.load_keyring("keyring.backends.Windows.WinVaultKeyring"))
+    keyring.set_keyring(original_keyring)
 
 
 def test_credentials_roundtrip_and_not_in_config(mem_keyring, tmp_path):

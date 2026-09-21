@@ -186,6 +186,24 @@ jobs:
           echo "GPU 의존 테스트(Real-ESRGAN 로컬 업스케일)는 이 macOS Runner 에 GPU 가 없어" \
                "자동으로 skip 됩니다 — 실패가 아니라 '검증 대상 아님' 입니다."
 
+      # ------------------------------------------------------------------
+      # 임시 진단 단계 (CI #1 에서 발견된 tests/test_batch.py 타이밍 실패 2건의 원인 조사용).
+      # 원인 확인 후 이 스텝은 제거하고 최소 수정을 적용한다 — timeout 숫자만 늘려서
+      # 숨기지 않는다. if: always() 로 위 pytest 스텝이 실패해도 실행되어 로그를 남긴다.
+      # ------------------------------------------------------------------
+      - name: "[TEMP] Investigate batch queue timing failures (3x -vv -s)"
+        if: always()
+        env:
+          UPCON_DATA_DIR: ${{ runner.temp }}/upcon_pytest_diag_data
+        run: |
+          for i in 1 2 3; do
+            echo "================ batch timing diagnostic run $i/3 ================"
+            python3 -m pytest -vv -s \
+              tests/test_batch.py::test_skip_current_continues_with_next \
+              tests/test_batch.py::test_stop_all_keeps_pending_and_restart_resumes \
+              || echo "(run $i exit code: $?)"
+          done
+
       - name: Headless smoke check (섹션 12 — config/데이터경로/keyring/FFmpeg/MainWindow)
         env:
           UPCON_DATA_DIR: ${{ runner.temp }}/upcon_smoke_data
