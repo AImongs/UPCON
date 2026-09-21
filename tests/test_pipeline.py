@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from pathlib import Path
 
@@ -80,12 +81,16 @@ def test_disk_plan_and_check(tmp_path, sample_480p):
 
 
 # ---------------------------------------------------------------- routing / availability
-def test_router_no_gpu_message(cfg, monkeypatch):
-    """GPU 탐지/미탐지 시 메시지 분기를 검증한다 — macOS 의 플랫폼 미지원 조기 반환(STEP MAC-1,
-    production 상 정상 동작)이 이 분기보다 먼저 걸리므로, 검증 대상인 GPU 탐지 로직에 실제로
-    도달하도록 플랫폼 게이트만 우회한다(운영 메시지/동작은 바꾸지 않음, Windows/Linux 에선
-    이 게이트가 이미 통과이므로 no-op)."""
-    monkeypatch.setattr(ln.plat, "local_upscale_unsupported_reason", lambda: None)
+_WIN_ONLY_LOCAL_NCNN = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="이 GPU/VRAM 분기는 로컬 Real-ESRGAN ncnn 바이너리+모델이 실제로 동봉된 Windows 에서만 "
+           "도달 가능하다(plat.local_upscale_unsupported_reason() 을 우회해도 macOS/Linux 는 바이너리가 "
+           "없어 '구성요소를 찾을 수 없음' 분기로 먼저 빠진다 — LocalNcnn macOS 활성화는 이번 범위 밖).",
+)
+
+
+@_WIN_ONLY_LOCAL_NCNN
+def test_router_no_gpu_message(cfg):
     provider = LocalNcnnProvider(cfg)
     router = Router(cfg, [provider], [])
     d = router.decide(ProcessMode.AUTO, SystemEnv(gpus=[]), 2)
@@ -94,9 +99,8 @@ def test_router_no_gpu_message(cfg, monkeypatch):
     assert d2.provider is None
 
 
-def test_vram_requirement_override(cfg, monkeypatch):
-    """VRAM 부족 분기 검증 — test_router_no_gpu_message 와 동일한 이유로 플랫폼 게이트만 우회한다."""
-    monkeypatch.setattr(ln.plat, "local_upscale_unsupported_reason", lambda: None)
+@_WIN_ONLY_LOCAL_NCNN
+def test_vram_requirement_override(cfg):
     cfg.routing.model_requirement_overrides = {"realesr-general-x4v3": {"min_vram_mb": 999999}}
     provider = LocalNcnnProvider(cfg)
     fake = SystemEnv(gpus=[GpuInfo(GpuVendor.NVIDIA, "NVIDIA GeForce RTX 5060", 8151, vulkan_available=True, vulkan_device_index=0)])

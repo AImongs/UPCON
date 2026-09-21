@@ -204,6 +204,14 @@ jobs:
               || echo "(run $i exit code: $?)"
           done
 
+      - name: "[TEMP] Instrumented timing repro of test_skip_current_continues_with_next (3x)"
+        if: always()
+        run: |
+          for i in 1 2 3; do
+            echo "================ instrumented repro run $i/3 ================"
+            python3 scripts/_diag_batch_timing.py || echo "(run $i exit code: $?)"
+          done
+
       - name: Headless smoke check (섹션 12 — config/데이터경로/keyring/FFmpeg/MainWindow)
         env:
           UPCON_DATA_DIR: ${{ runner.temp }}/upcon_smoke_data
