@@ -66,8 +66,13 @@ def main() -> int:
     check("1. UPCON 모듈 임포트 (PySide6 포함)", _import_upcon)
 
     def _data_path():
-        from upcon.core.paths import user_data_dir
-        d = user_data_dir()
+        """user_data_dir() 은 이 스크립트가 위에서 넣어 둔 UPCON_DATA_DIR 격리 오버라이드를
+        항상 먼저 본다(의도된 안전장치 — 실제 사용자 데이터를 건드리지 않기 위함, upcon.core.
+        paths.user_data_dir 참고) — 그래서 그 함수로는 macOS 기본 경로 계산 자체를 검증할 수
+        없다. 오버라이드의 영향을 받지 않는 플랫폼별 기본 경로 함수를 직접 검증한다."""
+        from upcon import APP_NAME
+        from upcon import platform as plat
+        d = plat.user_data_root() / APP_NAME
         assert "Library/Application Support/UPCON" in str(d).replace("\\", "/"), f"예상 밖 경로: {d}"
         return d
 
