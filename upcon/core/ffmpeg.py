@@ -170,12 +170,13 @@ def _video_codec_args(encoder: str, crf: int, preset: str) -> list[str]:
 
 def start_encoder(dst: Path, src_for_audio: Path, info: VideoInfo, fps: str,
                   crf: int = 18, preset: str = "medium", encoder: str = "libx264",
-                  resize: tuple[int, int] | None = None) -> subprocess.Popen:
+                  resize: tuple[int, int] | None = None, grain: int = 0) -> subprocess.Popen:
     """stdin 으로 들어오는 PNG 프레임들을 H.264 MP4 로 인코딩하고 원본 오디오를 붙인다.
 
     resize: (width, height) 가 주어지고 들어오는 프레임 크기와 다르면(1080p/4K 출력 모드)
     Lanczos 로 최종 크기를 맞춘다. None 이면 들어오는 프레임 크기를 그대로 쓴다(기존 2× 동작).
-    새 외부 라이브러리 없이 FFmpeg 에 이미 있는 표준 swscale 필터만 쓴다."""
+    grain: 0 보다 크면 최종 크기에서 밝기 채널에만 옅은 필름 그레인을 얹는다('느낌' 설정).
+    새 외부 라이브러리 없이 FFmpeg 에 이미 있는 표준 필터만 쓴다."""
     cmd = [str(ffmpeg_path()), "-v", "error", "-y",
            "-f", "image2pipe", "-framerate", fps, "-vcodec", "png", "-i", "pipe:0"]
     if info.has_audio:
@@ -186,8 +187,13 @@ def start_encoder(dst: Path, src_for_audio: Path, info: VideoInfo, fps: str,
             cmd += ["-c:a", "aac", "-b:a", "192k"]
     else:
         cmd += ["-map", "0:v:0"]
+    vf = []
     if resize:
-        cmd += ["-vf", f"scale={resize[0]}:{resize[1]}:flags=lanczos"]
+        vf.append(f"scale={resize[0]}:{resize[1]}:flags=lanczos")
+    if grain > 0:
+        vf += ["format=yuv420p", f"noise=c0s={int(grain)}:c0f=t+u"]
+    if vf:
+        cmd += ["-vf", ",".join(vf)]
     cmd += _video_codec_args(encoder, crf, preset)
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)]
     log.info("encoder cmd: %s", _scrub_cmd(cmd, dst, src_for_audio))

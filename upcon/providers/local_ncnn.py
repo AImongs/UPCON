@@ -40,8 +40,9 @@ from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode
 from upcon.core.env import GpuInfo, SystemEnv
 from upcon.core.errors import BinaryNotFoundError, UpconError
 from upcon.core.jobs import CancelToken, CancelledError, Job, Phase, Progress, ProgressCallback
-from upcon.core.models import NcnnModelSpec, effective_requirements, get_model
-from upcon.core.paths import bundled_models_dir
+from upcon.core.model_blend import blended_model
+from upcon.core.models import LookSpec, NcnnModelSpec, effective_requirements, get_look, get_model
+from upcon.core.paths import bundled_models_dir, user_data_dir
 from upcon.core.probe import VideoInfo, probe_video
 from upcon.providers.base import Availability, Estimate, UpscalerProvider
 
@@ -150,14 +151,29 @@ class LocalNcnnProvider(UpscalerProvider):
 
     # ------------------------------------------------------------------ 구성
     @property
+    def look(self) -> LookSpec:
+        return get_look(self.config.picture_look)
+
+    @property
     def spec(self) -> NcnnModelSpec:
-        return get_model(self.config.local_model)
+        return get_model(self.look.model_id or self.config.local_model)
 
     def _exe(self) -> Path:
         return find_binary("realesrgan-ncnn-vulkan")
 
     def _models_dir(self) -> Path:
         return bundled_models_dir()
+
+    def _model_for_run(self, scale: int) -> tuple[Path, str]:
+        """ncnn 에 넘길 (모델 폴더, 이름). '느낌'이 AI 결과를 섞으면 섞기 레이어를 붙인 변형을 쓴다.
+        upscale() 이 파일 하나를 시작할 때 한 번 정한다 — 처리 중에 설정을 바꿔도 그 파일 안에서 섞이지 않는다."""
+        base = self.spec.ncnn_model_name(scale)
+        try:
+            return blended_model(self._models_dir(), base, self.look.ai_weight, scale, user_data_dir())
+        except (OSError, ValueError) as e:
+            # 변형을 못 만들어도 업스케일은 계속한다(예전 방식 결과)
+            log.warning("blended model unavailable (%s) → using %s as is", e, base)
+            return self._models_dir(), base
 
     def _model_files_ok(self, scale: int) -> bool:
         base = self._models_dir() / self.spec.file_basename(scale)
@@ -197,7 +213,7 @@ class LocalNcnnProvider(UpscalerProvider):
                                 f"vram {gpu.vram_mb} < {need}")
 
         # 실제 모델 실행 self-test (세션 캐시)
-        key = (self.spec.id, gpu.vulkan_device_index)
+        key = (self.spec.id, self.config.picture_look, gpu.vulkan_device_index)
         if key not in self._selftest_cache:
             self._selftest_cache[key] = self._self_test(gpu, scale)
         st = self._selftest_cache[key]
@@ -248,10 +264,12 @@ class LocalNcnnProvider(UpscalerProvider):
         return Estimate(cost_usd=None, seconds=mpix / self._MPIX_PER_SEC, note="내 PC 처리 (비용 없음)")
 
     # ------------------------------------------------------------------ 실행
-    def _ncnn_cmd(self, src: Path, dst: Path, gpu: GpuInfo, scale: int) -> list[str]:
+    def _ncnn_cmd(self, src: Path, dst: Path, gpu: GpuInfo, scale: int,
+                  model: tuple[Path, str] | None = None) -> list[str]:
+        models_dir, name = model or self._model_for_run(scale)
         cmd = [str(self._exe()), "-i", str(src), "-o", str(dst),
-               "-n", self.spec.ncnn_model_name(scale), "-s", str(scale),
-               "-m", str(self._models_dir()), "-f", "png", "-j", "2:2:2", "-v"]
+               "-n", name, "-s", str(scale),
+               "-m", str(models_dir), "-f", "png", "-j", "2:2:2", "-v"]
         if gpu.vulkan_device_index >= 0:
             cmd += ["-g", str(gpu.vulkan_device_index)]
         return cmd
@@ -315,11 +333,15 @@ class LocalNcnnProvider(UpscalerProvider):
         job_dir = tempfs.new_job_dir(temp_root)
         t0 = time.time()
         frames_done = 0
+        look = self.look
+        model = self._model_for_run(scale)
+        log.info("look: %s (model=%s ai_weight=%.2f grain=%d)", self.config.picture_look, model[1],
+                 look.ai_weight, look.grain)
         try:
             enc_name = ff.pick_encoder(self.config.output_encoder)
             try:
                 frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
-                                                 progress, enc_name, resize_target, debug_dir)
+                                                 progress, enc_name, resize_target, debug_dir, model, look.grain)
                 progress(Progress(Phase.SAVE, frames_done, frames_done))
                 self._verify_output(output, target_w, target_h, info, enc_name)
             except UpconError as e:
@@ -335,7 +357,7 @@ class LocalNcnnProvider(UpscalerProvider):
                     output.unlink()
                 progress(Progress(Phase.PREPARE, 0, info.nb_frames, "인코더를 바꿔 다시 시작합니다"))
                 frames_done = self._run_pipeline(info, output, gpu, scale, plan.chunk_frames, job_dir, cancel,
-                                                 progress, "libx264", resize_target, debug_dir)
+                                                 progress, "libx264", resize_target, debug_dir, model, look.grain)
                 progress(Progress(Phase.SAVE, frames_done, frames_done))
                 self._verify_output(output, target_w, target_h, info, "libx264")
         except BaseException:
@@ -403,7 +425,8 @@ class LocalNcnnProvider(UpscalerProvider):
 
     def _run_pipeline(self, info: VideoInfo, output: Path, gpu: GpuInfo, scale: int, chunk_frames: int,
                       job_dir: Path, cancel: CancelToken, progress: ProgressCallback, enc_name: str = "libx264",
-                      resize_target: tuple[int, int] | None = None, debug_dir: Path | None = None) -> int:
+                      resize_target: tuple[int, int] | None = None, debug_dir: Path | None = None,
+                      model: tuple[Path, str] | None = None, grain: int = 0) -> int:
         w, h = info.width, info.height
         frame_bytes = w * h * 3
         header = ff.bmp_header(w, h)
@@ -431,7 +454,7 @@ class LocalNcnnProvider(UpscalerProvider):
             decoder_stderr_thread.start()
             log.info("encoder: %s resize=%s", enc_name, resize_target)
             encoder = ff.start_encoder(output, info.path, info, fps, self.config.output_crf,
-                                       self.config.output_preset, enc_name, resize_target)
+                                       self.config.output_preset, enc_name, resize_target, grain)
             encoder_stderr_thread = threading.Thread(target=_pump, args=(encoder.stderr, enc_err), daemon=True)
             encoder_stderr_thread.start()
             feeder.start(encoder.stdin)
@@ -456,7 +479,8 @@ class LocalNcnnProvider(UpscalerProvider):
 
                 # 2) ncnn 업스케일 (stderr 의 'done' 라인으로 실제 진행률)
                 self._run_ncnn_chunk(in_dir, out_dir, gpu, scale, cancel,
-                                     lambda d: report(frames_done + d, f"{frames_done + d} / {max(total, frames_done + d)} 프레임"))
+                                     lambda d: report(frames_done + d, f"{frames_done + d} / {max(total, frames_done + d)} 프레임"),
+                                     model)
                 produced = sorted(out_dir.glob("*.png"))
                 if len(produced) != n_in_chunk:
                     raise UpconError("AI 업스케일 결과 프레임 수가 맞지 않습니다.",
@@ -525,8 +549,8 @@ class LocalNcnnProvider(UpscalerProvider):
                           f"encoder exited rc={rc} ({type(err).__name__}: {err}) stderr: {tail[-400:]}")
 
     def _run_ncnn_chunk(self, in_dir: Path, out_dir: Path, gpu: GpuInfo, scale: int,
-                        cancel: CancelToken, on_frame) -> None:
-        cmd = self._ncnn_cmd(in_dir, out_dir, gpu, scale)
+                        cancel: CancelToken, on_frame, model: tuple[Path, str] | None = None) -> None:
+        cmd = self._ncnn_cmd(in_dir, out_dir, gpu, scale, model)
         p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                              creationflags=ff.CREATE_NO_WINDOW)
         done = 0

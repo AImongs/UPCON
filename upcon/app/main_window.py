@@ -24,7 +24,9 @@ from upcon.app.widgets.progress_panel import ProgressPanel
 from upcon.app.widgets.queue_panel import QueuePanel
 from upcon.core import credentials
 from upcon.core.config import AppConfig
-from upcon.core.constants import DEFAULT_SCALE, OutputMode, ProcessMode, output_suffix, parse_output_mode
+from upcon.core.constants import (
+    DEFAULT_SCALE, OutputMode, PictureLook, ProcessMode, output_suffix, parse_output_mode, parse_picture_look,
+)
 from upcon.core.env import SystemEnv
 from upcon.core.eta import EtaEstimator, format_eta
 from upcon.core.jobs import Job, JobStatus, Phase
@@ -125,6 +127,7 @@ class MainWindow(QMainWindow):
         self.options = OptionsPanel()
         self.options.modeChanged.connect(self._on_mode_changed)
         self.options.outputModeChanged.connect(self._on_output_mode_changed)
+        self.options.lookChanged.connect(self._on_look_changed)
         lay.addWidget(self.options)
 
         # 버튼 줄
@@ -166,6 +169,7 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.options.set_mode(ProcessMode.AUTO)
         self.options.set_output_mode(parse_output_mode(self.config.output_mode))
+        self.options.set_look(parse_picture_look(self.config.picture_look))
         self.queue.set_start_dir(self.config.last_open_dir)
         self._refresh_output_hint()
 
@@ -289,6 +293,11 @@ class MainWindow(QMainWindow):
                 j.output_mode = mode
         self._refresh_table()
         self._refresh_output_hint()
+
+    def _on_look_changed(self, look: PictureLook) -> None:
+        # 다음에 시작하는 파일부터 적용된다(처리 중인 파일은 시작할 때의 느낌 그대로)
+        self.config.picture_look = look.value
+        self.config.save()
 
     def _cloud_would_be_used(self) -> bool:
         mode = self.options.mode()

@@ -101,6 +101,7 @@ def test_router_no_gpu_message(cfg):
 
 @_WIN_ONLY_LOCAL_NCNN
 def test_vram_requirement_override(cfg):
+    cfg.picture_look = "sharp"          # 재정의는 실제로 쓰는 모델 id 기준 — 선명하게 = 설정 모델(realesr-general-x4v3)
     cfg.routing.model_requirement_overrides = {"realesr-general-x4v3": {"min_vram_mb": 999999}}
     provider = LocalNcnnProvider(cfg)
     fake = SystemEnv(gpus=[GpuInfo(GpuVendor.NVIDIA, "NVIDIA GeForce RTX 5060", 8151, vulkan_available=True, vulkan_device_index=0)])
@@ -197,12 +198,12 @@ def test_hw_encoder_failure_falls_back_to_x264(cfg, env, monkeypatch, sample_480
     real_start = ffm.start_encoder
     calls = []
 
-    def fake_start(dst, src, info, fps, crf=18, preset="medium", encoder="libx264", resize=None):
+    def fake_start(dst, src, info, fps, crf=18, preset="medium", encoder="libx264", resize=None, grain=0):
         calls.append(encoder)
         if encoder != "libx264":
             # 존재하지 않는 인코더 → ffmpeg 가 즉시 종료 (인코더 사망 상황 재현)
-            return real_start(dst, src, info, fps, crf, preset, "h264_nonexistent", resize)
-        return real_start(dst, src, info, fps, crf, preset, encoder, resize)
+            return real_start(dst, src, info, fps, crf, preset, "h264_nonexistent", resize, grain)
+        return real_start(dst, src, info, fps, crf, preset, encoder, resize, grain)
 
     monkeypatch.setattr(ffm, "start_encoder", fake_start)
     monkeypatch.setattr(ffm, "pick_encoder", lambda pref="auto": "h264_nvenc")

@@ -1,4 +1,4 @@
-"""처리 방식(자동/내 PC/클라우드) 과 출력 해상도(2×/1080p/4K) 선택 카드."""
+"""처리 방식(자동/내 PC/클라우드), 출력 해상도(2×/1080p/4K), 화질 느낌 선택 카드."""
 
 from __future__ import annotations
 
@@ -8,14 +8,15 @@ from PySide6.QtWidgets import (
 )
 
 from upcon.core.constants import (
-    DEFAULT_OUTPUT_MODE, OUTPUT_MODE_HINTS, OUTPUT_MODE_LABELS, PROCESS_MODE_HINTS, PROCESS_MODE_LABELS,
-    OutputMode, ProcessMode,
+    DEFAULT_OUTPUT_MODE, DEFAULT_PICTURE_LOOK, OUTPUT_MODE_HINTS, OUTPUT_MODE_LABELS, PICTURE_LOOK_HINTS,
+    PICTURE_LOOK_LABELS, PROCESS_MODE_HINTS, PROCESS_MODE_LABELS, OutputMode, PictureLook, ProcessMode,
 )
 
 
 class OptionsPanel(QFrame):
     modeChanged = Signal(object)         # ProcessMode
     outputModeChanged = Signal(object)   # OutputMode
+    lookChanged = Signal(object)         # PictureLook
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,6 +56,27 @@ class OptionsPanel(QFrame):
         row.addStretch(1)
         outer.addLayout(row)
 
+        # 둘째 줄: [화질 느낌] ●자연스럽게 ○중간 ○선명하게 — 내 PC 처리에만 적용(클라우드는 자체 모델)
+        look_row = QHBoxLayout()
+        look_row.setSpacing(18)
+        t3 = QLabel("화질 느낌")
+        t3.setProperty("class", "cardTitle")
+        t3.setToolTip("내 PC GPU 로 처리할 때 적용됩니다.")
+        look_row.addWidget(t3)
+        self.look_group = QButtonGroup(self)
+        self._look_buttons: dict[PictureLook, QRadioButton] = {}
+        for look in PictureLook:
+            rb = QRadioButton(PICTURE_LOOK_LABELS[look])
+            rb.setProperty("look", look.value)
+            rb.setToolTip(PICTURE_LOOK_HINTS[look])
+            self.look_group.addButton(rb)
+            self._look_buttons[look] = rb
+            look_row.addWidget(rb)
+        self.look_hint = QLabel("")
+        self.look_hint.setProperty("class", "hint")
+        look_row.addWidget(self.look_hint, 1)
+        outer.addLayout(look_row)
+
         self.mode_hint = QLabel(PROCESS_MODE_HINTS[ProcessMode.AUTO])
         self.mode_hint.setProperty("class", "hint")
         self.mode_hint.setWordWrap(True)
@@ -75,9 +97,11 @@ class OptionsPanel(QFrame):
 
         self.mode_group.buttonToggled.connect(self._on_mode_toggled)
         self.output_mode_group.buttonToggled.connect(self._on_output_mode_toggled)
+        self.look_group.buttonToggled.connect(self._on_look_toggled)
 
         self.set_mode(ProcessMode.AUTO)
         self.set_output_mode(DEFAULT_OUTPUT_MODE)
+        self.set_look(DEFAULT_PICTURE_LOOK)
 
     # ---- 상태 ----
     def mode(self) -> ProcessMode:
@@ -96,6 +120,14 @@ class OptionsPanel(QFrame):
         if rb and rb.isEnabled():
             rb.setChecked(True)
 
+    def look(self) -> PictureLook:
+        b = self.look_group.checkedButton()
+        return PictureLook(b.property("look")) if b else DEFAULT_PICTURE_LOOK
+
+    def set_look(self, look: PictureLook) -> None:
+        self._look_buttons[look].setChecked(True)
+        self.look_hint.setText(PICTURE_LOOK_HINTS[look])
+
     def set_env_hint(self, text: str) -> None:
         self.env_hint.setText(text.splitlines()[0] if text else "")
 
@@ -112,3 +144,9 @@ class OptionsPanel(QFrame):
     def _on_output_mode_toggled(self, button, checked: bool) -> None:
         if checked:
             self.outputModeChanged.emit(OutputMode(button.property("output_mode")))
+
+    def _on_look_toggled(self, button, checked: bool) -> None:
+        if checked:
+            look = PictureLook(button.property("look"))
+            self.look_hint.setText(PICTURE_LOOK_HINTS[look])
+            self.lookChanged.emit(look)

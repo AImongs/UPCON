@@ -10,7 +10,9 @@ from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
 from upcon import APP_NAME, APP_VERSION
+from upcon.app.license_gate import license_gate
 from upcon.app.main_window import MainWindow
+from upcon.core.license import LicenseManager
 from upcon.app.single_instance import SingleInstance
 from upcon.core.config import AppConfig
 from upcon.core.logging_setup import setup_logging
@@ -50,6 +52,10 @@ def main() -> int:
     if guard.already_running:
         return 0
     app, window = create_app()
+    # 수강생만 쓴다 — 확인되지 않은 PC 면 이름·전화번호 확인 창, 통과 못 하면 종료 (core/license.py)
+    if not license_gate(LicenseManager(user_data_dir()), window):
+        guard.close()
+        return 0
     guard.activated.connect(window.bring_to_front)
     window.show()
     try:

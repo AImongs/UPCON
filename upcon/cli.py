@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from upcon.core.config import AppConfig
-from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, OutputMode, PictureLook
 from upcon.core.env import detect_system_env
 from upcon.core.jobs import Job, Phase, Progress
 from upcon.core.logging_setup import setup_logging
@@ -38,6 +38,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("video", type=Path)
     ap.add_argument("--model", default=None)
+    ap.add_argument("--look", choices=[x.value for x in PictureLook], default=None,
+                    help="느낌: natural(기본)|balanced|sharp(예전 방식)")
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--scale", type=int, default=2)
     ap.add_argument("--mode", choices=[m.value for m in OutputMode], default=None,
@@ -51,6 +53,8 @@ def main() -> int:
     cfg = AppConfig.load()
     if a.model:
         cfg.local_model = a.model
+    if a.look:
+        cfg.picture_look = a.look
     if a.out_dir:
         cfg.output_dir = str(a.out_dir)
     if a.temp_budget_mb:

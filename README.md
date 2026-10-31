@@ -302,6 +302,41 @@ tests/                 pytest + UI 스모크 테스트
 전체 진행률은 총 프레임 수 기준. 처리 중에는 Windows 자동 절전을 막고(SetThreadExecutionState), 끝나면 원래대로 돌아간다.
 대기열은 queue.json 에 저장되어 앱을 다시 켜면 대기/실패/중단 항목이 복원된다 (처리 중이던 항목은 '중단됨').
 
+## 수강생 확인
+
+수강생만 쓰도록 켤 때 **이름 + 전화번호**를 확인한다 (`upcon/core/license.py`, 창은 `upcon/app/license_gate.py`).
+DramaCon 과 같은 강사 구글 시트 웹 앱(`ROSTER_URL`)에 묻고, 시트 'PC기록' 탭이 한 사람당 PC 대수(기본 2)를 센다.
+PC 코드는 DramaCon 과 같은 방식이라 한 PC 에서 두 앱을 함께 써도 1대로 센다.
+
+* 이미 확인된 PC 는 창 없이 켜지고 뒤에서 다시 확인한다 — 명단에서 지우면 다음 실행부터 막힌다.
+* 인터넷이 안 되면 마지막 확인 상태를 7일 동안 인정한다.
+* 이름·전화번호는 자격 증명 관리자(서비스 `UPCON`, 항목 `student_roster`)에만, 확인 상태는 `license.json`.
+* '정보 → 이 PC 등록 해제' 로 자리를 돌려준다.
+* 확인은 `python -m upcon` 의 `main()` 에만 있다 — 테스트·`ui_smoke.py` 는 `create_app()` 을 쓰므로 막히지 않는다.
+
+## 화질 느낌 (덜 쨍하게)
+
+Real-ESRGAN 결과만 쓰면 실사·AI 실사 영상에서 피부가 매끈한 플라스틱처럼 되고 윤곽이 쨍해진다.
+옵션 카드의 **화질 느낌**(`config.picture_look`)으로 고른다 (`upcon/core/models.py` 의 `LOOKS`).
+
+| 느낌 | 모델 | AI 비중 | 그레인 |
+|---|---|---|---|
+| 자연스럽게 (기본) | general wdn (질감 유지) | 55% | 3 |
+| 중간 | 설정 모델 (general dn05) | 75% | 2 |
+| 선명하게 (예전 방식) | 설정 모델 | 100% | 0 |
+
+AI 비중이 100% 가 아니면 `upcon/core/model_blend.py` 가 원본 `.param` 끝에 bicubic 2× 확대와 섞는 레이어 4개를
+붙인 모델을 `%LOCALAPPDATA%\UPCON\models_blend\` 에 만든다(가중치는 그대로 복사). 같은 프레임을 ncnn 안에서
+섞으므로 프레임 어긋남이 없고 속도도 같다. 폴더 이름에 `models` 가 들어 있어야 ncnn 실행기가 읽는다.
+그레인은 인코더에서 밝기 채널에만 얹는다(FFmpeg `noise`). 느낌은 파일 하나를 시작할 때 고정된다.
+
+```powershell
+.\.venv\Scripts\python -m upcon.cli 영상.mp4 --look natural|balanced|sharp
+```
+
+속도: RTX 5060 + 480p 에서 GPU 사용률 약 94% 로 AI 계산 자체가 병목이다(초당 약 11~12프레임).
+느낌 설정은 속도에 영향이 없다.
+
 ## 로컬 처리 파이프라인 (Tier 1)
 
 ```

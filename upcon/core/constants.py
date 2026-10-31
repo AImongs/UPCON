@@ -79,6 +79,40 @@ OUTPUT_MODE_HINTS: dict[OutputMode, str] = {
 DEFAULT_OUTPUT_MODE = OutputMode.TWO_X
 
 
+class PictureLook(str, Enum):
+    """내 PC 처리 결과의 '느낌'. 값은 설정 파일에 저장되는 문자열.
+
+    Real-ESRGAN 결과만 쓰면 피부가 매끈한 플라스틱처럼 되고 윤곽이 쨍해진다(실사·AI 실사 영상).
+    자연스럽게/중간은 AI 결과를 부드러운 확대와 섞고 아주 옅은 필름 그레인을 얹어 토파즈처럼
+    자연스럽게 만든다 (upcon/core/models.py 의 LOOKS)."""
+
+    NATURAL = "natural"
+    BALANCED = "balanced"
+    SHARP = "sharp"
+
+
+PICTURE_LOOK_LABELS: dict[PictureLook, str] = {
+    PictureLook.NATURAL: "자연스럽게",
+    PictureLook.BALANCED: "중간",
+    PictureLook.SHARP: "선명하게",
+}
+
+PICTURE_LOOK_HINTS: dict[PictureLook, str] = {
+    PictureLook.NATURAL: "피부·머리카락 질감을 살리고 윤곽을 과하게 세우지 않습니다. 실사·AI 드라마에 추천.",
+    PictureLook.BALANCED: "자연스럽게와 선명하게의 중간입니다.",
+    PictureLook.SHARP: "AI 결과를 그대로 씁니다(예전 방식). 윤곽이 또렷하지만 피부가 매끈하고 쨍해 보일 수 있습니다.",
+}
+
+DEFAULT_PICTURE_LOOK = PictureLook.NATURAL
+
+
+def parse_picture_look(value: str) -> PictureLook:
+    try:
+        return PictureLook(value)
+    except ValueError:
+        return DEFAULT_PICTURE_LOOK
+
+
 def output_suffix(mode: OutputMode) -> str:
     """결과 파일명 접미사. 예: 영상.mp4 -> 영상_2x.mp4 / 영상_1080p.mp4 / 영상_4k.mp4."""
     return f"_{mode.value}"

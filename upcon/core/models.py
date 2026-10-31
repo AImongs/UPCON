@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+from upcon.core.constants import PictureLook, parse_picture_look
 from upcon.core.env import ModelRequirements
 
 
@@ -84,6 +85,34 @@ DEFAULT_LOCAL_MODEL = "realesr-general-x4v3"
 
 def get_model(model_id: str) -> NcnnModelSpec:
     return LOCAL_MODELS.get(model_id) or LOCAL_MODELS[DEFAULT_LOCAL_MODEL]
+
+
+@dataclass(frozen=True)
+class LookSpec:
+    """'느낌' 하나가 정하는 값.
+
+    model_id    : None 이면 설정의 local_model 을 그대로 쓴다.
+    ai_weight   : AI 결과 비중(1.0 = AI 결과 그대로). 나머지는 같은 프레임의 bicubic 2× 확대.
+                  섞기는 ncnn 모델 안에서 한다(core/model_blend.py) — 프레임이 어긋날 일이 없고 추가 비용도 거의 없다.
+    grain       : 인코더 단계에서 밝기 채널에 얹는 필름 그레인 세기(FFmpeg noise 필터 c0s, 0 = 없음).
+                  AI 업스케일 특유의 '너무 깨끗한' 면을 깨서 실제 촬영본처럼 보이게 한다.
+    """
+
+    model_id: str | None
+    ai_weight: float
+    grain: int
+
+
+# 값은 실제 AI 드라마(Seedance 480p) 얼굴 클로즈업을 나란히 놓고 고른 것 (2026-10-31).
+LOOKS: dict[PictureLook, LookSpec] = {
+    PictureLook.NATURAL: LookSpec(model_id="realesr-general-x4v3-soft", ai_weight=0.55, grain=3),
+    PictureLook.BALANCED: LookSpec(model_id=None, ai_weight=0.75, grain=2),
+    PictureLook.SHARP: LookSpec(model_id=None, ai_weight=1.0, grain=0),
+}
+
+
+def get_look(look: str | PictureLook) -> LookSpec:
+    return LOOKS[parse_picture_look(look.value if isinstance(look, PictureLook) else look)]
 
 
 def effective_requirements(spec: NcnnModelSpec, overrides: dict[str, dict[str, Any]]) -> ModelRequirements:

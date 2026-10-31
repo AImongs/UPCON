@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from upcon.core.constants import DEFAULT_OUTPUT_MODE, DEFAULT_SCALE, ProcessMode
+from upcon.core.constants import DEFAULT_OUTPUT_MODE, DEFAULT_PICTURE_LOOK, DEFAULT_SCALE, ProcessMode
 from upcon.core.paths import config_file
 
 log = logging.getLogger(__name__)
@@ -55,6 +55,8 @@ class AppConfig:
     krw_per_usd: float = 0.0
     # 로컬 Tier 1 모델 id (upcon/core/models.py 의 LOCAL_MODELS 키)
     local_model: str = "realesr-general-x4v3"
+    # 내 PC 처리 결과의 느낌: natural(기본, 덜 쨍함) | balanced | sharp(예전 방식) — core/models.py 의 LOOKS
+    picture_look: str = DEFAULT_PICTURE_LOOK.value
     # 임시 작업 폴더. 비어 있으면 %LOCALAPPDATA%\UPCON\tmp
     temp_dir: str = ""
     # 청크 하나가 차지할 수 있는 임시 디스크 상한(MB). 청크 프레임 수는 여기서 역산한다.

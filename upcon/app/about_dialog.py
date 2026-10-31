@@ -11,12 +11,14 @@ import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
+    QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton,
+    QVBoxLayout,
 )
 
 from upcon import APP_DESCRIPTION, APP_NAME, APP_VERSION, COPYRIGHT
 from upcon import platform as plat
-from upcon.core.paths import bundled_bin_dir, notices_file
+from upcon.core.license import LicenseManager
+from upcon.core.paths import bundled_bin_dir, notices_file, user_data_dir
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +140,20 @@ class AboutDialog(QDialog):
         cr.setStyleSheet("font-size: 12px; color: #6b7280;")
         lay.addWidget(cr)
 
+        # 수강생 확인 상태 + 이 PC 등록 해제(다른 PC 에서 쓸 자리를 돌려준다)
+        self._license = LicenseManager(user_data_dir())
+        lic_row = QHBoxLayout()
+        self.license_label = QLabel(self._license.describe())
+        self.license_label.setWordWrap(True)
+        self.license_label.setStyleSheet("font-size: 12px; color: #374151; margin-top: 6px;")
+        lic_row.addWidget(self.license_label, 1)
+        self.release_btn = QPushButton("이 PC 등록 해제")
+        self.release_btn.setToolTip("이 PC 의 수강생 등록을 지워 다른 PC 에서 쓸 수 있게 합니다. 해제하면 UPCON 이 닫힙니다.")
+        self.release_btn.setVisible(self._license.state.status == "active")
+        self.release_btn.clicked.connect(self._release)
+        lic_row.addWidget(self.release_btn, 0, Qt.AlignmentFlag.AlignBottom)
+        lay.addLayout(lic_row)
+
         lay.addSpacing(12)
         head = QLabel("제3자 소프트웨어")
         head.setStyleSheet("font-size: 12px; font-weight: 700; color: #6b7280; letter-spacing: 1px;")
@@ -164,3 +180,26 @@ class AboutDialog(QDialog):
 
     def show_notices(self) -> None:
         NoticesDialog(self).exec()
+
+    def _release(self) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("이 PC 등록 해제")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText("이 PC 의 수강생 등록을 해제할까요?\n해제하면 UPCON 이 닫히고, 다시 쓰려면 이름·전화번호로 다시 확인해야 합니다.")
+        ok = box.addButton("해제", QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        if box.clickedButton() is not ok:
+            return
+        try:
+            self._license.release()
+        except Exception as e:  # noqa: BLE001 — 인터넷 연결 등
+            self.license_label.setText(f"해제하지 못했습니다: {e}")
+            return
+        self.accept()
+        win = self.parent()
+        if win is not None:
+            win.close()          # 처리 중이면 메인 창의 종료 확인을 그대로 거친다
+        else:
+            QApplication.instance().quit()
