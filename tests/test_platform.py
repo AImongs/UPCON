@@ -147,7 +147,7 @@ def test_credential_store_name_is_platform_specific(monkeypatch, value, expected
 def test_local_upscale_supported_only_on_windows(monkeypatch):
     assert _reload_for(monkeypatch, "win32").local_upscale_unsupported_reason() is None
     macos_reason = _reload_for(monkeypatch, "darwin").local_upscale_unsupported_reason()
-    assert macos_reason is not None and "클라우드" in macos_reason and "macOS" in macos_reason
+    assert macos_reason is None
     linux_reason = _reload_for(monkeypatch, "linux").local_upscale_unsupported_reason()
     assert linux_reason is not None and "클라우드" in linux_reason
 

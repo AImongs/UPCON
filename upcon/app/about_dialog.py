@@ -31,32 +31,7 @@ log = logging.getLogger(__name__)
 # (fetch 함)에는 "동봉됨"으로 자동으로 맞다.
 _MACOS_FFMPEG_BUNDLED = plat.IS_MACOS and (bundled_bin_dir() / "ffmpeg").is_file()
 
-if plat.IS_MACOS and _MACOS_FFMPEG_BUNDLED:
-    THIRD_PARTY_SUMMARY = (
-        "이 macOS 빌드에는 Real-ESRGAN(ncnn) 모델·실행기가 동봉되어 있지 않습니다. "
-        "각 구성요소는 별도의 제3자 소프트웨어이며, 저작권·라이선스 전문은 아래 "
-        "'제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
-        "• FFmpeg — Apple Silicon(arm64) 네이티브 정적 빌드가 동봉되어 있습니다(GPL). "
-        "출처·버전·SHA-256·Corresponding Source 확보 계획은 docs/MACOS_FFMPEG_SOURCE.md 참고.\n"
-        "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan(ncnn 기반) — 이 macOS 빌드에는 아직 포함되어 있지 않습니다. "
-        "내 PC GPU 업스케일 대신 클라우드 업스케일(fal.ai)만 지원합니다.\n"
-        "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"
-        "• 그 밖의 오픈소스 구성요소 — 전문 참조"
-    )
-elif plat.IS_MACOS:
-    THIRD_PARTY_SUMMARY = (
-        "이 macOS 빌드에는 FFmpeg 실행파일과 Real-ESRGAN(ncnn) 모델·실행기가 동봉되어 있지 않습니다. "
-        "각 구성요소는 별도의 제3자 소프트웨어이며, 저작권·라이선스 전문은 아래 "
-        "'제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
-        "• FFmpeg — 이 빌드는 동봉하지 않고 시스템에 설치된 FFmpeg(예: Homebrew)를 사용합니다. "
-        "FFmpeg 는 UPCON 과 별개의 제3자 소프트웨어이며 빌드 구성에 따라 GPL/LGPL 등의 라이선스를 따릅니다.\n"
-        "• Real-ESRGAN / Real-ESRGAN-ncnn-vulkan(ncnn 기반) — 이 macOS 빌드에는 아직 포함되어 있지 않습니다. "
-        "내 PC GPU 업스케일 대신 클라우드 업스케일(fal.ai)만 지원합니다.\n"
-        "• Qt / PySide6 — 사용자 인터페이스 (LGPLv3)\n"
-        "• 그 밖의 오픈소스 구성요소 — 전문 참조"
-    )
-else:
-    THIRD_PARTY_SUMMARY = (
+THIRD_PARTY_SUMMARY = (
         "UPCON 은 아래 제3자 소프트웨어를 포함합니다. 각 구성요소는 별도의 제3자 소프트웨어이며, "
         "저작권·라이선스 전문은 아래 '제3자 라이선스 전문'에서 확인할 수 있습니다.\n\n"
         "• FFmpeg — UPCON 에 동봉된 FFmpeg 빌드는 GPLv3 라이선스로 배포됩니다. "

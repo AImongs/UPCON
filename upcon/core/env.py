@@ -10,6 +10,8 @@ import ctypes
 import logging
 import os
 import platform
+import re
+import tempfile
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -263,6 +265,36 @@ def _merge(vulkan: list[GpuInfo], nvidia: list[GpuInfo]) -> list[GpuInfo]:
     return gpus
 
 
+def _macos_vulkan_devices() -> list[GpuInfo]:
+    """Ask the bundled ncnn/MoltenVK runtime for its actual device indices.
+
+    An invalid GPU index stops before model loading or inference. Metal device
+    ordering may differ from system_profiler, so use the engine's own list.
+    """
+    from upcon.core.binaries import find_binary
+    from upcon.core.paths import bundled_models_dir
+    try:
+        exe = find_binary("realesrgan-ncnn-vulkan")
+        with tempfile.TemporaryDirectory(prefix="upcon_gpu_") as tmp:
+            result = subprocess.run(
+                [str(exe), "-i", str(Path(tmp)/"probe.bmp"),
+                 "-o", str(Path(tmp)/"probe.png"), "-g", "999",
+                 "-m", str(bundled_models_dir()), "-n", "realesr-animevideov3", "-s", "2"],
+                capture_output=True, text=True, errors="replace", timeout=20)
+        log.info("macOS ncnn GPU probe rc=%s: %s", result.returncode, result.stderr[-4000:])
+        devices = {}
+        for index, name in re.findall(r"\[(\d+) ([^]\n]+)\]", result.stderr):
+            if index not in devices:
+                vendor = (GpuVendor.AMD if "AMD" in name else
+                          GpuVendor.INTEL if "Intel" in name else GpuVendor.OTHER)
+                devices[index] = GpuInfo(vendor=vendor, name=name, vulkan_available=True,
+                    vulkan_device_index=int(index), is_integrated="Apple" in name)
+        return list(devices.values())
+    except Exception as exc:
+        log.warning("macOS GPU detection failed: %s", exc)
+        return []
+
+
 def detect_system_env() -> SystemEnv:
     env = SystemEnv(
         os_version=f"{platform.system()} {platform.release()} ({platform.version()})",
@@ -293,7 +325,7 @@ def detect_system_env() -> SystemEnv:
         except Exception:
             pass
 
-    env.gpus = _merge(_vulkan_devices(), _nvidia_devices())
+    env.gpus = _macos_vulkan_devices() if _plat.IS_MACOS else _merge(_vulkan_devices(), _nvidia_devices())
     log.info("system env: %s | RAM %d MB | %s", env.os_version, env.ram_mb, env.summary())
     return env
 

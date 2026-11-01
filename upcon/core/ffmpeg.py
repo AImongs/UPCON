@@ -298,6 +298,8 @@ def verify_video_decodable(path: Path, timeout: int = 600) -> None:
 
 def check_encoder_exit(p: subprocess.Popen, dst: Path) -> None:
     stderr = ""
+    if p.stdin is not None and p.stdin.closed:
+        p.stdin = None  # communicate() must not flush an already closed input pipe.
     try:
         _, err = p.communicate(timeout=600)
         stderr = (err or b"").decode("utf-8", "replace")

@@ -6,7 +6,7 @@
 지원 플랫폼:
 - Windows(win32): 기존 UPCON 0.3.0 동작을 그대로 유지한다. 이 모듈이 하는 일은 '기존 상수를
   옮겨 적는 것'뿐이고, Windows 쪽 분기의 실제 동작은 한 글자도 바꾸지 않는다.
-- macOS(darwin): 이번 STEP에서 새로 지원한다. 로컬(Real-ESRGAN) 업스케일은 아직 없고,
+- macOS(darwin): 이번 STEP에서 새로 지원한다. 로컬(Real-ESRGAN/MoltenVK) GPU 업스케일과
   앱 실행·데이터 저장·자격 증명·FFmpeg·클라우드 업스케일은 되는 것이 목표다.
 - 그 외(Linux 등): 이번 STEP의 검증 대상이 아니다. 막지는 않지만(크래시 방지가 우선이므로),
   '검증된 플랫폼'으로 취급하지 않는다 — 자격 증명은 keyring 자동 탐색에 맡기고, 로컬 업스케일은
@@ -77,9 +77,7 @@ def credential_store_name() -> str:
 
 def local_upscale_unsupported_reason() -> str | None:
     """이 플랫폼에서 로컬(Real-ESRGAN ncnn) 업스케일을 아예 쓸 수 없는 이유.
-    지원되면(현재는 Windows 만) None. macOS 로컬 AI 는 MAC-2 이후 과제다."""
-    if IS_MACOS:
-        return "현재 macOS 버전의 UPCON은 아직 내 PC GPU 업스케일을 지원하지 않습니다. 클라우드 업스케일을 이용해 주세요."
+    Windows/macOS 는 None, Linux 는 미지원 안내를 반환한다."""
     if IS_LINUX:
         return "현재 Linux 버전의 UPCON은 아직 내 PC GPU 업스케일을 지원하지 않습니다. 클라우드 업스케일을 이용해 주세요."
     return None

@@ -110,14 +110,14 @@ def main() -> int:
         win = MainWindow(AppConfig())
         try:
             decision = win.controller.decide(ProcessMode.LOCAL, 2)
-            assert decision.provider is None, "macOS 에는 로컬 Provider 가 아직 없어야 한다"
-            assert "클라우드" in decision.message and "macOS" in decision.message, decision.message
+            assert decision.provider is None, "GPU가 없는 환경에서는 로컬 처리를 선택하지 않아야 한다"
+            assert decision.message
             return f"창 생성 OK, 로컬 선택 시 안내: {decision.message!r}"
         finally:
             win.controller.shutdown()
             win.close()
 
-    check("5. MainWindow 생성 + 로컬 업스케일 미지원 안내 확인", _main_window)
+    check("5. MainWindow 생성 + GPU 없는 환경의 로컬 안내 확인", _main_window)
 
     def _ffmpeg():
         from upcon.core.binaries import ffmpeg_path, ffprobe_path

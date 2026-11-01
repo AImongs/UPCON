@@ -28,6 +28,8 @@ import shutil
 import subprocess
 import threading
 import time
+import struct
+import zlib
 from pathlib import Path
 
 from upcon import platform as plat
@@ -136,6 +138,23 @@ def _read_exact(stream, n: int) -> bytes:
     return bytes(buf)
 
 
+def _write_input_frame(path: Path, header: bytes, frame: bytes, width: int, height: int) -> Path:
+    if not plat.IS_MACOS:
+        ff.write_bmp(path, header, frame, width, height)
+        return path
+    # The official macOS executable accepts PNG, but rejects our top-down BMP.
+    rgb = bytearray(len(frame))
+    rgb[0::3], rgb[1::3], rgb[2::3] = frame[2::3], frame[1::3], frame[0::3]
+    stride = width * 3
+    raw = b"".join(b"\x00" + rgb[y*stride:(y+1)*stride] for y in range(height))
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind+data))
+    path = path.with_suffix(".png")
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                    + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
+    return path
+
+
 class LocalNcnnProvider(UpscalerProvider):
     id = "local_ncnn"
     name = "내 PC GPU (Real-ESRGAN)"
@@ -228,7 +247,7 @@ class LocalNcnnProvider(UpscalerProvider):
         try:
             w = h = 64
             src = d / "t.bmp"
-            ff.write_bmp(src, ff.bmp_header(w, h), bytes([90, 120, 160]) * (w * h), w, h)
+            src = _write_input_frame(src, ff.bmp_header(w, h), bytes([90, 120, 160]) * (w * h), w, h)
             out = d / "t.png"
             cmd = self._ncnn_cmd(src, out, gpu, scale)
             t0 = time.time()
@@ -238,6 +257,10 @@ class LocalNcnnProvider(UpscalerProvider):
             if r.returncode != 0 or not out.exists():
                 return Availability(False, self._explain_ncnn_failure(r.stderr),
                                     f"selftest rc={r.returncode}: {r.stderr[-500:]}")
+            import struct
+            header = out.read_bytes()[:24]
+            if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", header[16:24]) != (w * scale, h * scale):
+                return Availability(False, "AI 엔진의 출력 크기가 올바르지 않습니다.", "invalid self-test PNG dimensions")
             log.info("ncnn self-test ok on %s (%.1fs) model=%s", gpu.name, dt, self.spec.id)
             return Availability(True, "", "")
         except subprocess.TimeoutExpired:
@@ -270,6 +293,8 @@ class LocalNcnnProvider(UpscalerProvider):
         cmd = [str(self._exe()), "-i", str(src), "-o", str(dst),
                "-n", name, "-s", str(scale),
                "-m", str(models_dir), "-f", "png", "-j", "2:2:2", "-v"]
+        if plat.IS_MACOS:
+            cmd += ["-t", "128"]
         if gpu.vulkan_device_index >= 0:
             cmd += ["-g", str(gpu.vulkan_device_index)]
         return cmd
@@ -685,7 +710,7 @@ class _Producer:
                     if len(data) < self._frame_bytes:
                         eof = True
                         break
-                    ff.write_bmp(in_dir / f"f{frames_read:07d}.bmp", self._header, data, self._w, self._h)
+                    _write_input_frame(in_dir / f"f{frames_read:07d}.bmp", self._header, data, self._w, self._h)
                     frames_read += 1
                     n += 1
                 if n == 0:
